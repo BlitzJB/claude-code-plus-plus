@@ -2,7 +2,13 @@ import { simpleGit, SimpleGit } from 'simple-git';
 import { homedir } from 'os';
 import { join, basename } from 'path';
 import { mkdir, rm, access } from 'fs/promises';
+import { appendFileSync } from 'fs';
 import type { Worktree } from '../types.js';
+
+function debugLog(...args: any[]): void {
+  const msg = `[${new Date().toISOString()}] [WorktreeManager] ${args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ')}\n`;
+  appendFileSync('/tmp/claude-pp-debug.log', msg);
+}
 
 export class WorktreeManager {
   private basePath: string;
@@ -97,17 +103,23 @@ export class WorktreeManager {
   }
 
   async remove(path: string, force: boolean = false): Promise<void> {
+    debugLog('remove called with path:', path, 'force:', force);
     try {
       const args = ['worktree', 'remove'];
       if (force) args.push('--force');
       args.push(path);
 
+      debugLog('Running git', args.join(' '));
       await this.git.raw(args);
+      debugLog('git worktree remove succeeded');
     } catch (error) {
+      debugLog('git worktree remove failed:', error);
       // Try to clean up manually if git worktree remove fails
       if (force) {
+        debugLog('Attempting manual cleanup');
         await rm(path, { recursive: true, force: true });
         await this.git.raw(['worktree', 'prune']);
+        debugLog('Manual cleanup succeeded');
       } else {
         throw new Error(`Failed to remove worktree at '${path}': ${error}`);
       }
@@ -116,6 +128,47 @@ export class WorktreeManager {
 
   async prune(): Promise<void> {
     await this.git.raw(['worktree', 'prune']);
+  }
+
+  /**
+   * Rename a worktree's branch and move its directory atomically.
+   * If either operation fails, rollback any changes.
+   */
+  async rename(worktreePath: string, oldBranch: string, newBranch: string): Promise<string> {
+    const sanitizedNewBranch = newBranch.replace(/[^a-zA-Z0-9-_]/g, '-');
+    const newWorktreePath = join(this.basePath, `${basename(this.repoPath)}-${sanitizedNewBranch}`);
+
+    // Step 1: Rename the branch
+    try {
+      await this.git.raw(['branch', '-m', oldBranch, newBranch]);
+    } catch (error) {
+      throw new Error(`Failed to rename branch '${oldBranch}' to '${newBranch}': ${error}`);
+    }
+
+    // Step 2: Move the worktree directory
+    try {
+      await this.git.raw(['worktree', 'move', worktreePath, newWorktreePath]);
+    } catch (error) {
+      // Rollback: rename branch back
+      try {
+        await this.git.raw(['branch', '-m', newBranch, oldBranch]);
+      } catch (rollbackError) {
+        // Rollback failed - we're in an inconsistent state
+        throw new Error(`Failed to move worktree and rollback failed. Manual intervention required. Original error: ${error}`);
+      }
+      throw new Error(`Failed to move worktree from '${worktreePath}' to '${newWorktreePath}': ${error}`);
+    }
+
+    return newWorktreePath;
+  }
+
+  /**
+   * Get the path of a worktree by branch name
+   */
+  async getWorktreePath(branch: string): Promise<string | null> {
+    const worktrees = await this.list();
+    const wt = worktrees.find(w => w.branch === branch);
+    return wt?.path || null;
   }
 
   async getBranches(): Promise<string[]> {

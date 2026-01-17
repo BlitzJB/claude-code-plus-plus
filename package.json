@@ -9,22 +9,32 @@
     "ccp": "./dist/index.js"
   },
   "scripts": {
-    "dev": "tsx src/index.tsx",
+    "dev": "tsx src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
   },
+  "files": [
+    "dist/**/*",
+    "assets/**/*",
+    "README.md",
+    "LICENSE"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/anthropics/claude-code-plus-plus.git"
+  },
+  "homepage": "https://github.com/anthropics/claude-code-plus-plus#readme",
+  "bugs": {
+    "url": "https://github.com/anthropics/claude-code-plus-plus/issues"
+  },
+  "author": "blitzjb",
   "dependencies": {
-    "ink": "^5.0.1",
-    "react": "^18.3.1",
-    "node-pty": "^1.0.0",
-    "simple-git": "^3.27.0",
-    "zustand": "^5.0.0",
-    "cli-spinners": "^3.2.0"
+    "simple-git": "^3.27.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
-    "@types/react": "^18.3.0",
     "typescript": "^5.6.0",
     "tsx": "^4.19.0"
   },
@@ -33,11 +43,15 @@
   },
   "keywords": [
     "claude",
+    "claude-code",
     "ai",
     "terminal",
     "tui",
+    "tmux",
     "git-worktree",
-    "multi-agent"
+    "multi-agent",
+    "parallel",
+    "coding-assistant"
   ],
   "license": "MIT"
 }
