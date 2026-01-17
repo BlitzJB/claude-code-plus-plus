@@ -23,11 +23,11 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/anthropics/claude-code-plus-plus.git"
+    "url": "git+https://github.com/BlitzJB/claude-code-plus-plus.git"
   },
-  "homepage": "https://github.com/anthropics/claude-code-plus-plus#readme",
+  "homepage": "https://github.com/BlitzJB/claude-code-plus-plus#readme",
   "bugs": {
-    "url": "https://github.com/anthropics/claude-code-plus-plus/issues"
+    "url": "https://github.com/BlitzJB/claude-code-plus-plus/issues"
   },
   "author": "blitzjb",
   "dependencies": {
