@@ -459,6 +459,80 @@ export function renderInputModal(state: SidebarState, title: string, prompt: str
 }
 
 /**
+ * Word-wrap text to fit within a given width
+ */
+function wordWrap(text: string, maxWidth: number): string[] {
+  const words = text.split(' ');
+  const lines: string[] = [];
+  let currentLine = '';
+
+  for (const word of words) {
+    if (currentLine.length + word.length + 1 <= maxWidth) {
+      currentLine += (currentLine ? ' ' : '') + word;
+    } else {
+      if (currentLine) lines.push(currentLine);
+      currentLine = word;
+    }
+  }
+  if (currentLine) lines.push(currentLine);
+
+  return lines;
+}
+
+/**
+ * Render error modal (fullscreen)
+ */
+export function renderErrorModal(state: SidebarState, dims?: RenderDimensions): string {
+  const cols = dims?.cols || process.stdout.columns || 80;
+  const rows = dims?.rows || process.stdout.rows || 24;
+
+  let output = ansi.hideCursor + ansi.clearScreen;
+
+  // Title area
+  const startY = Math.floor(rows / 4);
+  output += ansi.moveTo(startY, 1);
+
+  // Header
+  const title = 'Error';
+  const titlePadding = Math.floor((cols - title.length) / 2);
+  output += ' '.repeat(Math.max(0, titlePadding));
+  output += `${ansi.bold}${ansi.fg.red}${title}${ansi.reset}\n\n`;
+
+  // Separator
+  const separatorWidth = Math.min(60, cols - 4);
+  const separatorPadding = Math.floor((cols - separatorWidth) / 2);
+  output += ' '.repeat(Math.max(0, separatorPadding));
+  output += `${ansi.dim}${'─'.repeat(separatorWidth)}${ansi.reset}\n\n`;
+
+  // Error message - word wrapped
+  const errorMessage = state.errorMessage || 'An unknown error occurred.';
+  const messageWidth = Math.min(56, cols - 8);
+  const messagePadding = Math.floor((cols - messageWidth) / 2);
+  const msgPad = ' '.repeat(Math.max(4, messagePadding));
+
+  const lines = wordWrap(errorMessage, messageWidth);
+  for (const line of lines) {
+    output += msgPad;
+    output += `${ansi.fg.white}${line}${ansi.reset}\n`;
+  }
+  output += '\n\n';
+
+  // OK button
+  const buttonPadding = Math.floor((cols - 10) / 2);
+  output += ' '.repeat(Math.max(4, buttonPadding));
+  output += `${ansi.bold}${ansi.fg.cyan}▸ ${ansi.reset}`;
+  output += `${ansi.bold}${ansi.inverse} OK ${ansi.reset}`;
+  output += '\n\n\n';
+
+  // Help text at bottom
+  const helpPadding = Math.floor((cols - 25) / 2);
+  output += ' '.repeat(Math.max(0, helpPadding));
+  output += `${ansi.dim}Enter or Esc to dismiss${ansi.reset}`;
+
+  return output;
+}
+
+/**
  * Render collapsed sidebar
  */
 export function renderCollapsed(sessionCount: number): string {

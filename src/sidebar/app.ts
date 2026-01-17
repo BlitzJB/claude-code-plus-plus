@@ -17,6 +17,7 @@ import {
   renderQuitModal,
   renderDeleteModal,
   renderInputModal,
+  renderErrorModal,
   renderCollapsed,
   type RenderDimensions,
 } from './render';
@@ -154,6 +155,7 @@ export class SidebarApp {
       modalSelection: 0,
       inputBuffer: '',
       deleteTarget: null,
+      errorMessage: null,
       fullscreenModal: false,
       hiddenPaneId: null,
       collapsed: false,
@@ -243,6 +245,8 @@ export class SidebarApp {
       output = renderInputModal(this.state, title, 'New name:', dims);
     } else if (this.state.modal === 'new-session') {
       output = renderInputModal(this.state, 'New Session', 'Session name:', dims);
+    } else if (this.state.modal === 'error') {
+      output = renderErrorModal(this.state, dims);
     } else {
       output = renderMain(this.state);
     }
@@ -310,6 +314,9 @@ export class SidebarApp {
         break;
       case 'delete':
         this.handleDeleteModalInput(key);
+        break;
+      case 'error':
+        this.handleErrorModalInput(key);
         break;
       case 'new-worktree':
       case 'rename':
@@ -507,6 +514,25 @@ export class SidebarApp {
     }
   }
 
+  private handleErrorModalInput(key: { key: string }): void {
+    // Any key dismisses the error modal
+    if (key.key === 'escape' || key.key === 'enter' || key.key === ' ') {
+      this.state.modal = 'none';
+      this.state.errorMessage = null;
+      this.exitFullscreenModal();
+      this.render();
+      return;
+    }
+  }
+
+  private showError(message: string): void {
+    debugLog('showError:', message);
+    this.enterFullscreenModal();
+    this.state.modal = 'error';
+    this.state.errorMessage = message;
+    this.render();
+  }
+
   private handleTextInput(key: { key: string }, data: Buffer): void {
     debugLog('handleTextInput: key=' + key.key, 'modal=' + this.state.modal, 'buffer=' + this.state.inputBuffer);
 
@@ -656,7 +682,8 @@ export class SidebarApp {
       this.state.selectedIndex = this.getMaxIndex();
       this.render();
     } catch (err) {
-      // Failed to create worktree
+      const message = err instanceof Error ? err.message : String(err);
+      this.showError(`Failed to create worktree: ${message}`);
     }
   }
 
@@ -929,8 +956,10 @@ export class SidebarApp {
     // Remove worktree via git
     try {
       await this.worktreeManager.remove(worktree.path, true);
-    } catch {
-      // Ignore errors
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.showError(`Failed to delete worktree: ${message}`);
+      return;
     }
 
     // Remove from state

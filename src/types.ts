@@ -45,7 +45,7 @@ export interface Session {
 // Sidebar State
 // ============================================================================
 
-export type ModalType = 'none' | 'quit' | 'delete' | 'new-worktree' | 'new-session' | 'rename';
+export type ModalType = 'none' | 'quit' | 'delete' | 'new-worktree' | 'new-session' | 'rename' | 'error';
 
 export interface DeleteTarget {
   type: 'session' | 'worktree';
@@ -76,6 +76,7 @@ export interface SidebarState {
   modalSelection: number;
   inputBuffer: string;
   deleteTarget: DeleteTarget | null;
+  errorMessage: string | null;
 
   // Fullscreen modal state
   fullscreenModal: boolean;
