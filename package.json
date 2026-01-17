@@ -1,0 +1,43 @@
+{
+  "name": "claude-code-plus-plus",
+  "version": "0.1.0",
+  "description": "Multi-pane terminal interface for parallel Claude Code agents with git worktree isolation",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "claude++": "./dist/index.js",
+    "ccp": "./dist/index.js"
+  },
+  "scripts": {
+    "dev": "tsx src/index.tsx",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "ink": "^5.0.1",
+    "react": "^18.3.1",
+    "node-pty": "^1.0.0",
+    "simple-git": "^3.27.0",
+    "zustand": "^5.0.0",
+    "cli-spinners": "^3.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/react": "^18.3.0",
+    "typescript": "^5.6.0",
+    "tsx": "^4.19.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    "claude",
+    "ai",
+    "terminal",
+    "tui",
+    "git-worktree",
+    "multi-agent"
+  ],
+  "license": "MIT"
+}
