@@ -6,8 +6,7 @@
 
 import { appendFileSync, existsSync, writeFileSync } from 'fs';
 import { execSync } from 'child_process';
-import { fileURLToPath } from 'url';
-import { dirname, resolve } from 'path';
+import { resolve } from 'path';
 import * as tmux from '../tmux';
 import { WorktreeManager } from '../git';
 import { parseKey, parseMouseEvent, isMouseEvent, setupRawMode, restoreMode } from './input';
@@ -1224,9 +1223,6 @@ export class SidebarApp {
     });
 
     // Get path to bar-handler - check for .ts first (dev mode), then .js (compiled)
-    const __filename = fileURLToPath(import.meta.url);
-    const __dirname = dirname(__filename);
-
     // Check both src and dist locations
     const tsPath = resolve(__dirname, '../terminal/bar-handler.ts');
     const jsPath = resolve(__dirname, '../terminal/bar-handler.js');

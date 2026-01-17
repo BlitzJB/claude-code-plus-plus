@@ -4,15 +4,11 @@
  * Creates tmux session, sets up panes, and spawns sidebar process.
  */
 
-import { resolve, dirname } from 'path';
-import { fileURLToPath } from 'url';
+import { resolve } from 'path';
 import { existsSync, writeFileSync, chmodSync } from 'fs';
 import { execSync } from 'child_process';
 import { tmpdir } from 'os';
 import * as tmux from '../tmux';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
 
 // ============================================================================
 // Types
