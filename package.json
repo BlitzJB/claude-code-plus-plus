@@ -1,6 +1,6 @@
 {
   "name": "claude-code-plus-plus",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Multi-pane terminal interface for parallel Claude Code agents with git worktree isolation",
   "type": "module",
   "main": "dist/index.js",
