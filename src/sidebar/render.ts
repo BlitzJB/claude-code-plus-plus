@@ -4,45 +4,23 @@
  * ANSI-based terminal rendering for the sidebar.
  */
 
-// ============================================================================
-// ANSI Escape Codes
-// ============================================================================
+import { ansi } from '../ansi';
+import {
+  SIDEBAR_WIDTH,
+  DEFAULT_COLS,
+  DEFAULT_ROWS,
+  HEADER_ROW_COUNT,
+  FOOTER_ROW_COUNT,
+  MODAL_MAX_WIDTH,
+  LIST_ITEM_PADDING,
+  WORKTREE_ITEM_PADDING,
+  UI_TEXT,
+  KEY_HINTS,
+  VERSION,
+} from '../constants';
 
-const ESC = '\x1b';
-const CSI = `${ESC}[`;
-
-export const ansi = {
-  // Screen
-  clearScreen: `${CSI}2J`,
-  moveTo: (row: number, col: number) => `${CSI}${row};${col}H`,
-
-  // Cursor
-  hideCursor: `${CSI}?25l`,
-  showCursor: `${CSI}?25h`,
-
-  // Style
-  reset: `${CSI}0m`,
-  bold: `${CSI}1m`,
-  dim: `${CSI}2m`,
-  inverse: `${CSI}7m`,
-
-  // Colors
-  fg: {
-    black: `${CSI}30m`,
-    red: `${CSI}31m`,
-    green: `${CSI}32m`,
-    yellow: `${CSI}33m`,
-    blue: `${CSI}34m`,
-    magenta: `${CSI}35m`,
-    cyan: `${CSI}36m`,
-    white: `${CSI}37m`,
-    gray: `${CSI}90m`,
-  },
-
-  // Mouse
-  enableMouse: `${CSI}?1000h${CSI}?1006h`,
-  disableMouse: `${CSI}?1000l${CSI}?1006l`,
-};
+// Re-export for backwards compatibility
+export { ansi };
 
 // ============================================================================
 // Rendering Helpers
@@ -123,13 +101,13 @@ export function buildListItems(state: SidebarState): ListItem[] {
  * Render the main sidebar view
  */
 export function renderMain(state: SidebarState): string {
-  const cols = process.stdout.columns || 25;
-  const rows = process.stdout.rows || 24;
+  const cols = process.stdout.columns || SIDEBAR_WIDTH;
+  const rows = process.stdout.rows || DEFAULT_ROWS;
 
   let output = ansi.hideCursor + ansi.clearScreen + ansi.moveTo(1, 1);
 
   // Header with collapse button
-  const header = 'Claude++';
+  const header = UI_TEXT.APP_TITLE;
   const collapseBtn = '◀';
   const headerPadding = Math.max(0, cols - header.length - 2);
   output += `${ansi.bold}${ansi.fg.cyan}${header}${ansi.reset}`;
@@ -139,9 +117,9 @@ export function renderMain(state: SidebarState): string {
 
   // List items
   const items = buildListItems(state);
-  let row = 3;
+  let row = HEADER_ROW_COUNT;
 
-  for (let i = 0; i < items.length && row < rows - 8; i++) {
+  for (let i = 0; i < items.length && row < rows - FOOTER_ROW_COUNT; i++) {
     const item = items[i];
     const isSelected = i === state.selectedIndex;
     const isActive = item.type === 'session' && item.session?.id === state.activeSessionId;
@@ -165,15 +143,15 @@ export function renderMain(state: SidebarState): string {
     // Content
     if (item.type === 'worktree') {
       const icon = item.worktree?.isMain ? '◆' : '◇';
-      const name = truncate(item.label, cols - 6); // Leave room for " [+]"
+      const name = truncate(item.label, cols - WORKTREE_ITEM_PADDING);
       line += `${icon} ${name}`;
       line += ansi.reset;
       // Add plus button (always visible, cyan colored)
-      const padding = Math.max(0, cols - name.length - 6);
+      const padding = Math.max(0, cols - name.length - WORKTREE_ITEM_PADDING);
       line += ' '.repeat(padding);
       line += `${ansi.fg.cyan}[+]${ansi.reset}`;
     } else {
-      const name = truncate(item.label, cols - 4);
+      const name = truncate(item.label, cols - LIST_ITEM_PADDING);
       line += `  └ ${name}`;
       line += ansi.reset;
     }
@@ -184,10 +162,10 @@ export function renderMain(state: SidebarState): string {
 
   // "New Worktree" button
   output += '\n';
-  output += `${ansi.fg.cyan}+ New Worktree${ansi.reset}\n`;
+  output += `${ansi.fg.cyan}${UI_TEXT.NEW_WORKTREE_BUTTON}${ansi.reset}\n`;
 
   // Help at bottom
-  output += ansi.moveTo(rows - 7, 1);
+  output += ansi.moveTo(rows - 8, 1);
   output += `${ansi.dim}${'─'.repeat(cols - 1)}${ansi.reset}\n`;
   output += `${ansi.fg.cyan}↵${ansi.reset}  ${ansi.dim}new session${ansi.reset}\n`;
   output += `${ansi.fg.cyan}n${ansi.reset}  ${ansi.dim}new worktree${ansi.reset}\n`;
@@ -195,6 +173,7 @@ export function renderMain(state: SidebarState): string {
   output += `${ansi.fg.cyan}d${ansi.reset}  ${ansi.dim}delete${ansi.reset}\n`;
   output += `${ansi.fg.cyan}r${ansi.reset}  ${ansi.dim}rename${ansi.reset}\n`;
   output += `${ansi.fg.cyan}^Q${ansi.reset} ${ansi.dim}quit${ansi.reset}\n`;
+  output += `${ansi.dim}v${VERSION}${ansi.reset}\n`;
 
   return output;
 }

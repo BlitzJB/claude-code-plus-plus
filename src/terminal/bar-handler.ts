@@ -15,23 +15,7 @@
 import { execSync } from 'child_process';
 import { renderTerminalBar, findClickedTab, type TabPosition } from './bar-render';
 import type { Terminal } from '../types';
-
-// ============================================================================
-// ANSI Escape Codes
-// ============================================================================
-
-const ESC = '\x1b';
-const CSI = `${ESC}[`;
-
-const ansi = {
-  clearScreen: `${CSI}2J`,
-  moveTo: (row: number, col: number) => `${CSI}${row};${col}H`,
-  reset: `${CSI}0m`,
-  hideCursor: `${CSI}?25l`,
-  showCursor: `${CSI}?25h`,
-  enableMouse: `${CSI}?1000h${CSI}?1006h`,
-  disableMouse: `${CSI}?1000l${CSI}?1006l`,
-};
+import { ansi } from '../ansi';
 
 // ============================================================================
 // State

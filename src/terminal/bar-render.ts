@@ -6,31 +6,8 @@
  */
 
 import type { Terminal } from '../types';
-
-// ============================================================================
-// ANSI Escape Codes
-// ============================================================================
-
-const ESC = '\x1b';
-const CSI = `${ESC}[`;
-
-const ansi = {
-  clearLine: `${CSI}2K`,
-  moveTo: (row: number, col: number) => `${CSI}${row};${col}H`,
-  reset: `${CSI}0m`,
-  bold: `${CSI}1m`,
-  dim: `${CSI}2m`,
-  fg: {
-    black: `${CSI}30m`,
-    white: `${CSI}37m`,
-    gray: `${CSI}90m`,
-    cyan: `${CSI}36m`,
-  },
-  bg: {
-    cyan: `${CSI}46m`,
-  },
-  hideCursor: `${CSI}?25l`,
-};
+import { ansi } from '../ansi';
+import { UI_TEXT, MIN_TAB_WIDTH, TAB_PREFIX_WIDTH } from '../constants';
 
 // ============================================================================
 // Types
@@ -62,14 +39,14 @@ export function renderTerminalBar(
   const tabPositions: TabPosition[] = [];
 
   // Hints shown on the right
-  const hints = '1-9:switch n:new d:del';
+  const hints = UI_TEXT.TERMINAL_HINTS;
   const hintsLen = hints.length;
 
   let output = ansi.hideCursor + ansi.clearLine + ansi.moveTo(1, 1);
 
   if (terminals.length === 0) {
     // No terminals message
-    const msg = "No terminals. Press 'n' to create.";
+    const msg = `${UI_TEXT.NO_TERMINALS}. Press 'n' to create.`;
     const padding = Math.max(1, width - msg.length - hintsLen - 2);
     output += `${ansi.dim}${msg}${ansi.reset}`;
     output += ' '.repeat(padding);
@@ -78,8 +55,8 @@ export function renderTerminalBar(
   }
 
   // Calculate available space for tabs
-  const availableForTabs = width - hintsLen - 4;
-  const maxTabWidth = Math.max(8, Math.floor(availableForTabs / terminals.length) - 1);
+  const availableForTabs = width - hintsLen - TAB_PREFIX_WIDTH;
+  const maxTabWidth = Math.max(MIN_TAB_WIDTH, Math.floor(availableForTabs / terminals.length) - 1);
 
   let currentCol = 1;
 
@@ -122,7 +99,7 @@ export function renderTerminalBar(
   }
 
   // Add [+] button for new terminal
-  const plusBtn = ' [+]';
+  const plusBtn = ` ${UI_TEXT.NEW_TERMINAL_BUTTON}`;
   tabPositions.push({
     index: -1, // Special index for "new terminal"
     startCol: currentCol,

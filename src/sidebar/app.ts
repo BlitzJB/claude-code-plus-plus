@@ -2,9 +2,10 @@
  * Sidebar Application
  *
  * Main sidebar class that handles state management, input handling, and rendering.
+ * Uses extracted managers for session, terminal, and pane operations.
  */
 
-import { appendFileSync, existsSync, writeFileSync } from 'fs';
+import { existsSync } from 'fs';
 import { execSync } from 'child_process';
 import { resolve } from 'path';
 import * as tmux from '../tmux';
@@ -22,106 +23,37 @@ import {
   type RenderDimensions,
 } from './render';
 import type { SidebarState, Worktree, Session, ModalType, Terminal } from '../types';
-import { renderTerminalBar } from '../terminal';
+import {
+  SIDEBAR_WIDTH,
+  SIDEBAR_LOG_PATH,
+  DEFAULT_CLAUDE_CMD,
+  TERMINAL_BAR_HEIGHT,
+  CLAUDE_PANE_PERCENT,
+} from '../constants';
+import {
+  setupTerminalBarResize,
+  removeTerminalBarResize,
+  enforceSidebarWidth,
+  breakSessionPanes,
+  joinSessionPanes,
+} from './pane-orchestrator';
+import * as sessionManager from './session-manager';
+import * as terminalManager from './terminal-manager';
+import { Logger } from '../utils/logger';
+import { getErrorMessage } from '../utils/errors';
+import { isValidBranchName, isValidSessionName } from '../utils/validation';
+import { MAIN_COMMANDS, executeCommand, type CommandContext } from './commands';
 
-// Debug logging
+// Create logger for sidebar
+const logger = new Logger({
+  level: 'debug',
+  context: 'Sidebar',
+  filePath: SIDEBAR_LOG_PATH,
+});
+
+// Debug logging helper (for backwards compatibility)
 function debugLog(...args: unknown[]): void {
-  const msg = `[${new Date().toISOString()}] ${args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ')}\n`;
-  appendFileSync('/tmp/claude-pp-sidebar.log', msg);
-}
-
-// ============================================================================
-// Constants
-// ============================================================================
-
-const SIDEBAR_WIDTH = 25;
-const DEFAULT_CLAUDE_CMD = 'claude --dangerously-skip-permissions';
-const TERMINAL_BAR_HEIGHT = 1;
-const CLAUDE_PANE_PERCENT = 70; // Claude pane gets 70%, terminal area gets 30%
-
-/**
- * Set up terminal bar resize enforcement (hook + mouse binding).
- * Uses a file-based script to avoid complex quoting issues.
- * Sets up both after-resize-pane hook AND MouseDragEnd1Border binding.
- */
-function setupTerminalBarResize(sessionName: string, claudePaneId: string, barPaneId: string, terminalBodyPaneId: string): void {
-  const hookCmd = getTerminalBarResizeHook(claudePaneId, barPaneId, terminalBodyPaneId);
-
-  // Set up the after-resize-pane hook
-  tmux.setHook(sessionName, 'after-resize-pane', hookCmd);
-
-  // Also bind MouseDragEnd1Border to run the script when mouse drag ends
-  // This ensures the fix runs when user releases mouse after dragging border
-  const safeName = `${claudePaneId}-${barPaneId}`.replace(/%/g, '');
-  const scriptPath = `/tmp/cpp-resize-hook-${safeName}.sh`;
-  try {
-    execSync(`tmux bind-key -T root MouseDragEnd1Border run-shell "sh ${scriptPath}"`, { stdio: 'ignore' });
-  } catch {
-    // Ignore errors
-  }
-}
-
-/**
- * Create a shell script for terminal bar resize hook and return the hook command.
- * Uses a file-based script to avoid complex quoting issues.
- */
-function getTerminalBarResizeHook(claudePaneId: string, barPaneId: string, terminalBodyPaneId: string): string {
-  // Use pane IDs in filename to make it unique per terminal configuration
-  const safeName = `${claudePaneId}-${barPaneId}`.replace(/%/g, '');
-  const scriptPath = `/tmp/cpp-resize-hook-${safeName}.sh`;
-
-  // Write the script file
-  const scriptContent = `#!/bin/sh
-# Terminal bar resize hook - keeps bar at ${TERMINAL_BAR_HEIGHT} row(s)
-# Lock check - prevent recursion
-LOCK=$(tmux show-option -gqv @cpp-resizing 2>/dev/null)
-[ -n "$LOCK" ] && exit 0
-
-# Get current heights
-BAR_H=$(tmux display-message -p -t "${barPaneId}" '#{pane_height}' 2>/dev/null)
-[ -z "$BAR_H" ] && exit 0
-[ "$BAR_H" -eq ${TERMINAL_BAR_HEIGHT} ] && exit 0
-
-CLAUDE_H=$(tmux display-message -p -t "${claudePaneId}" '#{pane_height}' 2>/dev/null)
-BODY_H=$(tmux display-message -p -t "${terminalBodyPaneId}" '#{pane_height}' 2>/dev/null)
-
-# Get previous heights (to detect which pane shrank)
-PREV_CLAUDE=$(tmux show-option -gqv @cpp-prev-claude 2>/dev/null)
-PREV_BODY=$(tmux show-option -gqv @cpp-prev-body 2>/dev/null)
-
-# Acquire lock and set trap
-tmux set-option -g @cpp-resizing 1
-trap 'tmux set-option -gu @cpp-resizing 2>/dev/null' EXIT
-
-# Calculate how much bar is over target
-D=$((BAR_H - ${TERMINAL_BAR_HEIGHT}))
-
-# Determine which pane to grow based on which one shrank
-if [ -n "$PREV_CLAUDE" ] && [ "$CLAUDE_H" -lt "$PREV_CLAUDE" ]; then
-  # Claude shrank (user dragged tabs ceiling UP) -> grow Terminal body
-  tmux resize-pane -t "${terminalBodyPaneId}" -U "$D" 2>/dev/null
-elif [ -n "$PREV_BODY" ] && [ "$BODY_H" -lt "$PREV_BODY" ]; then
-  # Terminal body shrank (user dragged body ceiling DOWN) -> grow Claude
-  tmux resize-pane -t "${claudePaneId}" -D "$D" 2>/dev/null
-else
-  # Fallback: just set bar height directly, let tmux decide
-  :
-fi
-
-# Set bar to exact height
-tmux resize-pane -t "${barPaneId}" -y ${TERMINAL_BAR_HEIGHT} 2>/dev/null
-
-# Store FINAL heights (after adjustment) for next comparison
-FINAL_CLAUDE=$(tmux display-message -p -t "${claudePaneId}" '#{pane_height}' 2>/dev/null)
-FINAL_BODY=$(tmux display-message -p -t "${terminalBodyPaneId}" '#{pane_height}' 2>/dev/null)
-tmux set-option -g @cpp-prev-claude "$FINAL_CLAUDE"
-tmux set-option -g @cpp-prev-body "$FINAL_BODY"
-`;
-
-  // Write script to file (synchronously)
-  writeFileSync(scriptPath, scriptContent, { mode: 0o755 });
-
-  return `"run-shell 'sh ${scriptPath}'"`;
+  logger.debug(args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' '));
 }
 
 // ============================================================================
@@ -329,16 +261,7 @@ export class SidebarApp {
   }
 
   private handleMainInput(key: { key: string; ctrl: boolean; alt: boolean }): void {
-    // Ctrl+C - show quit modal (when sidebar is focused)
-    if (key.ctrl && key.key === 'c') {
-      this.enterFullscreenModal();
-      this.state.modal = 'quit';
-      this.state.modalSelection = 0;
-      this.render();
-      return;
-    }
-
-    // If collapsed, only expand on any key
+    // If collapsed, expand on any key first
     if (this.state.collapsed) {
       this.state.collapsed = false;
       this.enforceSidebarWidth();
@@ -346,90 +269,70 @@ export class SidebarApp {
       return;
     }
 
-    // Ctrl+Q - show quit modal (works from any pane via tmux binding)
-    if (key.ctrl && key.key === 'q') {
-      this.enterFullscreenModal();
-      this.state.modal = 'quit';
-      this.state.modalSelection = 0;
-      this.render();
-      return;
-    }
+    // Create command context with action handlers
+    const context: CommandContext = {
+      state: this.state,
+      actions: {
+        moveUp: () => {
+          this.state.selectedIndex = Math.max(0, this.state.selectedIndex - 1);
+          this.render();
+        },
+        moveDown: () => {
+          const maxIndex = this.getMaxIndex();
+          this.state.selectedIndex = Math.min(maxIndex, this.state.selectedIndex + 1);
+          this.render();
+        },
+        activateSelected: () => {
+          debugLog('handleMainInput: enter pressed, calling activateSelected');
+          this.activateSelected();
+        },
+        showQuitModal: () => {
+          this.enterFullscreenModal();
+          this.state.modal = 'quit';
+          this.state.modalSelection = 0;
+          this.render();
+        },
+        showDeleteModal: () => {
+          const item = this.getSelectedItem();
+          if (item && !(item.type === 'worktree' && item.worktree?.isMain)) {
+            this.state.deleteTarget = {
+              type: item.type,
+              id: item.id,
+              name: item.type === 'session' ? (item.session?.title || '') : (item.worktree?.branch || ''),
+              worktree: item.worktree,
+              session: item.session,
+            };
+            this.enterFullscreenModal();
+            this.state.modal = 'delete';
+            this.state.modalSelection = 0;
+            this.render();
+          }
+        },
+        showNewWorktreeModal: () => {
+          this.enterFullscreenModal();
+          this.state.modal = 'new-worktree';
+          this.state.inputBuffer = '';
+          this.render();
+        },
+        showRenameModal: () => {
+          const item = this.getSelectedItem();
+          if (item && !(item.type === 'worktree' && item.worktree?.isMain)) {
+            this.enterFullscreenModal();
+            this.state.modal = 'rename';
+            this.state.inputBuffer = item.type === 'session'
+              ? item.session?.title || ''
+              : item.worktree?.branch || '';
+            this.render();
+          }
+        },
+        toggleCollapsed: () => this.toggleCollapsed(),
+        createTerminal: () => this.createTerminal(),
+        render: () => this.render(),
+      },
+    };
 
-    // Ctrl+G - toggle collapsed
-    if (key.ctrl && key.key === 'g') {
-      this.toggleCollapsed();
-      return;
-    }
-
-    // Ctrl+T - create new terminal for active session
-    if (key.ctrl && key.key === 't') {
-      this.createTerminal();
-      return;
-    }
-
-    // Navigation
-    if (key.key === 'up' || key.key === 'k') {
-      this.state.selectedIndex = Math.max(0, this.state.selectedIndex - 1);
-      this.render();
-      return;
-    }
-
-    if (key.key === 'down' || key.key === 'j') {
-      const maxIndex = this.getMaxIndex();
-      this.state.selectedIndex = Math.min(maxIndex, this.state.selectedIndex + 1);
-      this.render();
-      return;
-    }
-
-    // Enter - activate selected
-    if (key.key === 'enter') {
-      debugLog('handleMainInput: enter pressed, calling activateSelected');
-      this.activateSelected();
-      return;
-    }
-
-    // n - new worktree
-    if (key.key === 'n') {
-      this.enterFullscreenModal();
-      this.state.modal = 'new-worktree';
-      this.state.inputBuffer = '';
-      this.render();
-      return;
-    }
-
-    // d - delete
-    if (key.key === 'd') {
-      const item = this.getSelectedItem();
-      if (item && !(item.type === 'worktree' && item.worktree?.isMain)) {
-        // Store delete target info for context in modal
-        this.state.deleteTarget = {
-          type: item.type,
-          id: item.id,
-          name: item.type === 'session' ? (item.session?.title || '') : (item.worktree?.branch || ''),
-          worktree: item.worktree,
-          session: item.session,
-        };
-        this.enterFullscreenModal();
-        this.state.modal = 'delete';
-        this.state.modalSelection = 0; // Default to No
-        this.render();
-      }
-      return;
-    }
-
-    // r - rename
-    if (key.key === 'r') {
-      const item = this.getSelectedItem();
-      if (item && !(item.type === 'worktree' && item.worktree?.isMain)) {
-        this.enterFullscreenModal();
-        this.state.modal = 'rename';
-        this.state.inputBuffer = item.type === 'session'
-          ? item.session?.title || ''
-          : item.worktree?.branch || '';
-        this.render();
-      }
-      return;
-    }
+    // Execute command from map
+    executeCommand(MAIN_COMMANDS, key, context);
   }
 
   private handleQuitModalInput(key: { key: string; ctrl: boolean }): void {
@@ -594,15 +497,36 @@ export class SidebarApp {
   }
 
   private confirmTextInput(value: string): void {
+    const trimmed = value.trim();
+
     switch (this.state.modal) {
       case 'new-worktree':
-        this.createWorktree(value);
+        if (!isValidBranchName(trimmed)) {
+          this.showError('Invalid branch name. Avoid special characters like ~ ^ : ? * [ ] \\');
+          return;
+        }
+        this.createWorktree(trimmed);
         break;
+
       case 'rename':
-        this.renameSelected(value);
+        if (!isValidSessionName(trimmed)) {
+          this.showError('Invalid name. Please use a shorter name without control characters.');
+          return;
+        }
+        this.renameSelected(trimmed);
         break;
+
       case 'new-session':
-        this.createSession(value);
+        if (!isValidSessionName(trimmed)) {
+          this.showError('Invalid session name. Please use a shorter name without control characters.');
+          return;
+        }
+        // Check for duplicate session names
+        if (this.state.sessions.some(s => s.title === trimmed)) {
+          this.showError('A session with this name already exists.');
+          return;
+        }
+        this.createSession(trimmed);
         break;
     }
   }
@@ -682,8 +606,8 @@ export class SidebarApp {
       this.state.selectedIndex = this.getMaxIndex();
       this.render();
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      this.showError(`Failed to create worktree: ${message}`);
+      logger.error('Failed to create worktree', err);
+      this.showError(`Failed to create worktree: ${getErrorMessage(err)}`);
     }
   }
 
@@ -699,7 +623,7 @@ export class SidebarApp {
 
     const worktree = item.worktree!;
     debugLog('createSession: worktree=' + worktree.branch, 'path=' + worktree.path);
-    const sessionId = `session-${Date.now()}`;
+    const sessionId = sessionManager.generateSessionId();
 
     let paneId: string;
     const claudeCmd = DEFAULT_CLAUDE_CMD;
@@ -957,8 +881,8 @@ export class SidebarApp {
     try {
       await this.worktreeManager.remove(worktree.path, true);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      this.showError(`Failed to delete worktree: ${message}`);
+      logger.error('Failed to delete worktree', err);
+      this.showError(`Failed to delete worktree: ${getErrorMessage(err)}`);
       return;
     }
 
@@ -998,7 +922,7 @@ export class SidebarApp {
 
   private enforceSidebarWidth(): void {
     if (!this.state.collapsed) {
-      tmux.resizePane(this.state.sidebarPaneId, SIDEBAR_WIDTH);
+      enforceSidebarWidth(this.state.sidebarPaneId);
     }
   }
 
@@ -1026,7 +950,7 @@ export class SidebarApp {
       case 'switch':
         const index = parseInt(data, 10);
         if (!isNaN(index) && session) {
-          this.switchTerminal(session, index);
+          this.switchToTerminal(session, index);
         }
         break;
       case 'new':
@@ -1069,7 +993,7 @@ export class SidebarApp {
 
     const terminalNum = session.terminals.length + 1;
     const terminalTitle = `Terminal ${terminalNum}`;
-    const terminalId = `terminal-${Date.now()}`;
+    const terminalId = terminalManager.generateTerminalId();
 
     debugLog('createTerminal:', terminalTitle, 'for session', session.title);
 
@@ -1155,11 +1079,11 @@ export class SidebarApp {
   /**
    * Switch to a different terminal tab within a session
    */
-  private switchTerminal(session: Session, targetIndex: number): void {
+  private switchToTerminal(session: Session, targetIndex: number): void {
     if (targetIndex < 0 || targetIndex >= session.terminals.length) return;
     if (targetIndex === session.activeTerminalIndex) return;
 
-    debugLog('switchTerminal:', targetIndex, 'in session', session.title);
+    debugLog('switchToTerminal:', targetIndex, 'in session', session.title);
 
     const currentTerminal = session.terminals[session.activeTerminalIndex];
     const newTerminal = session.terminals[targetIndex];
