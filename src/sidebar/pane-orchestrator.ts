@@ -14,6 +14,7 @@ import {
   SIDEBAR_WIDTH,
   TERMINAL_BAR_HEIGHT,
   RESIZE_HOOK_SCRIPT_PREFIX,
+  DIFF_PANE_WIDTH,
 } from '../constants';
 import type { Session } from '../types';
 
@@ -130,7 +131,11 @@ export function enforceSidebarWidth(sidebarPaneId: string): void {
  * Break session panes for fullscreen modal
  */
 export function breakSessionPanes(session: Session): void {
-  // Break active terminal first (if any)
+  // Break diff pane first (if any)
+  if (session.diffPaneId) {
+    tmux.breakPane(session.diffPaneId);
+  }
+  // Break active terminal (if any)
   if (session.terminals.length > 0) {
     const activeTerminal = session.terminals[session.activeTerminalIndex];
     if (activeTerminal) {
@@ -155,6 +160,12 @@ export function joinSessionPanes(
 ): void {
   // Join Claude pane
   tmux.joinPane(session.paneId, sidebarPaneId, true);
+
+  // Join diff pane if exists
+  if (session.diffPaneId) {
+    tmux.joinPane(session.diffPaneId, session.paneId, true);
+    tmux.resizePane(session.diffPaneId, DIFF_PANE_WIDTH);
+  }
 
   // Join terminal bar and active terminal if session has terminals
   if (session.terminals.length > 0 && session.terminalBarPaneId) {

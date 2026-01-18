@@ -14,6 +14,7 @@ This directory contains comprehensive documentation for AI agents working on Cla
 | [WORKTREE-MANAGEMENT.md](WORKTREE-MANAGEMENT.md) | `src/git/worktree.ts` | Git worktree operations |
 | [HOTKEYS-AND-COMMANDS.md](HOTKEYS-AND-COMMANDS.md) | `src/sidebar/commands.ts`, `src/sidebar/input.ts` | Key parsing, command routing, hotkey system |
 | [TMUX-INTEGRATION.md](TMUX-INTEGRATION.md) | `src/tmux/commands.ts`, `src/tmux/pane.ts` | Tmux wrappers, pane operations |
+| [DIFF-PANE.md](DIFF-PANE.md) | `src/diff/*.ts` | Git diff viewer, file changes, diff rendering |
 
 ## When to Update Documentation
 
@@ -89,6 +90,12 @@ Every source file in `src/` should be documented. Current coverage:
 | `src/tmux/commands.ts` | TMUX-INTEGRATION.md |
 | `src/tmux/pane.ts` | TMUX-INTEGRATION.md |
 | `src/git/worktree.ts` | WORKTREE-MANAGEMENT.md |
+| `src/diff/git-diff.ts` | DIFF-PANE.md |
+| `src/diff/diff-pane-render.ts` | DIFF-PANE.md |
+| `src/diff/diff-handler.ts` | DIFF-PANE.md |
+| `src/diff/file-diff-header-render.ts` | DIFF-PANE.md |
+| `src/diff/file-diff-header-handler.ts` | DIFF-PANE.md |
+| `src/diff/diff-manager.ts` | DIFF-PANE.md, PANE-ORCHESTRATION.md |
 
 ---
-**Last Updated:** 2025-01-18
+**Last Updated:** 2026-01-18

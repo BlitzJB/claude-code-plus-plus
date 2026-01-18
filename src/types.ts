@@ -3,6 +3,12 @@
  */
 
 // ============================================================================
+// Diff View Mode
+// ============================================================================
+
+export type DiffViewMode = 'diffs-only' | 'whole-file';
+
+// ============================================================================
 // Worktree Types
 // ============================================================================
 
@@ -39,6 +45,13 @@ export interface Session {
   terminals: Terminal[];
   activeTerminalIndex: number;
   terminalBarPaneId: string | null;
+  // Diff pane
+  diffPaneId: string | null;
+  diffPaneManuallyHidden: boolean;  // True if user manually closed diff pane
+  diffViewMode: DiffViewMode;       // View mode for file diff: 'diffs-only' or 'whole-file'
+  // File diff view panes (when viewing individual file diff)
+  fileDiffHeaderPaneId: string | null;   // The 1-row header pane
+  fileDiffContentPaneId: string | null;  // The pane showing file content (uses less)
 }
 
 // ============================================================================
@@ -88,6 +101,14 @@ export interface SidebarState {
   // Terminal command mode (for receiving commands from terminal bar)
   terminalCommandMode: boolean;
   terminalCommandBuffer: string;
+
+  // Diff command mode (for receiving commands from diff pane)
+  diffCommandMode: boolean;
+  diffCommandBuffer: string;
+
+  // File diff view state (when viewing a file diff in Claude pane area)
+  fileDiffMode: boolean;
+  fileDiffFilename: string | null;
 }
 
 // ============================================================================

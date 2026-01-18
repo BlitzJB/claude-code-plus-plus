@@ -148,6 +148,16 @@ export function killPane(paneId: string): void {
 }
 
 /**
+ * Respawn a pane with a new command (kills current process, runs new one)
+ * This runs the command directly without shell echo, so the command isn't visible
+ */
+export function respawnPane(paneId: string, command: string): void {
+  // Escape the command for shell
+  const escaped = command.replace(/'/g, "'\\''");
+  run(['respawn-pane', '-k', '-t', paneId, `'${escaped}'`]);
+}
+
+/**
  * Swap two panes
  */
 export function swapPanes(paneId1: string, paneId2: string): void {

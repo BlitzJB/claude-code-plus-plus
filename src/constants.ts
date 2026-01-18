@@ -50,7 +50,7 @@ export const DEFAULT_ROWS = 24;
 export const HEADER_ROW_COUNT = 3;
 
 /** Reserved rows at the bottom for help text (including version line) */
-export const FOOTER_ROW_COUNT = 9;
+export const FOOTER_ROW_COUNT = 10;
 
 /** Maximum width for modal content */
 export const MODAL_MAX_WIDTH = 60;
@@ -117,6 +117,7 @@ export const KEY_HINTS = {
   NEW_SESSION: '↵  new session',
   NEW_WORKTREE: 'n  new worktree',
   TERMINAL: '^T terminal',
+  DIFF: '^D diff',
   DELETE: 'd  delete',
   RENAME: 'r  rename',
   QUIT: '^Q quit',
@@ -134,3 +135,9 @@ export const BAR_HANDLER_LOG_PATH = '/tmp/cpp-bar-handler.log';
 
 /** Path prefix for resize hook scripts */
 export const RESIZE_HOOK_SCRIPT_PREFIX = '/tmp/cpp-resize-hook-';
+
+/** Path for diff handler debug log */
+export const DIFF_HANDLER_LOG_PATH = '/tmp/cpp-diff-handler.log';
+
+/** Width of the diff pane (right sidebar) in columns */
+export const DIFF_PANE_WIDTH = 30;

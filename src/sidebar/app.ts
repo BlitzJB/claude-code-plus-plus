@@ -22,14 +22,35 @@ import {
   renderCollapsed,
   type RenderDimensions,
 } from './render';
-import type { SidebarState, Worktree, Session, ModalType, Terminal } from '../types';
+import type { SidebarState, Worktree, Session, ModalType, Terminal, DiffViewMode } from '../types';
 import {
   SIDEBAR_WIDTH,
   SIDEBAR_LOG_PATH,
   DEFAULT_CLAUDE_CMD,
   TERMINAL_BAR_HEIGHT,
   CLAUDE_PANE_PERCENT,
+  DIFF_PANE_WIDTH,
 } from '../constants';
+import {
+  getDiffSummary,
+  getFileDiff,
+  watchForChanges,
+  createDiffPane,
+  startDiffHandler,
+  updateDiffPane,
+  closeDiffPane,
+  breakDiffPane,
+  joinDiffPane,
+  type DiffFileSummary,
+} from '../diff';
+import {
+  createFileDiffContentPane,
+  createFileDiffHeaderPane,
+  startFileDiffHeaderHandler,
+  startFileDiffContentHandler,
+  closeFileDiffHeaderPane,
+  closeFileDiffContentPane,
+} from '../diff';
 import {
   setupTerminalBarResize,
   removeTerminalBarResize,
@@ -64,6 +85,8 @@ export class SidebarApp {
   private state: SidebarState;
   private worktreeManager: WorktreeManager;
   private running = false;
+  private fileWatcherCleanup: (() => void) | null = null;
+  private diffPaneOpening = false; // Guard against double openDiffPane calls
 
   constructor(
     repoPath: string,
@@ -93,6 +116,10 @@ export class SidebarApp {
       collapsed: false,
       terminalCommandMode: false,
       terminalCommandBuffer: '',
+      diffCommandMode: false,
+      diffCommandBuffer: '',
+      fileDiffMode: false,
+      fileDiffFilename: null,
     };
   }
 
@@ -180,6 +207,8 @@ export class SidebarApp {
     } else if (this.state.modal === 'error') {
       output = renderErrorModal(this.state, dims);
     } else {
+      // Normal view - sidebar renders normally even in file diff mode
+      // (file diff content is shown in a separate pane)
       output = renderMain(this.state);
     }
 
@@ -200,11 +229,18 @@ export class SidebarApp {
 
     debugLog('handleInput:', 'hex=' + data.toString('hex'), 'modal=' + this.state.modal);
 
-    // Handle terminal command mode (commands from terminal bar handler)
+    // Handle terminal command mode (commands from terminal bar, diff pane handler, or file diff header handler)
     if (this.state.terminalCommandMode) {
       if (str === '\r' || str === '\n') {
-        // Enter - execute command
-        this.executeTerminalCommand(this.state.terminalCommandBuffer);
+        // Enter - execute command based on prefix
+        const cmd = this.state.terminalCommandBuffer;
+        if (cmd.startsWith('DIFF:')) {
+          this.executeDiffCommand(cmd);
+        } else if (cmd.startsWith('FILEDIFF:')) {
+          this.executeFileDiffCommand(cmd);
+        } else {
+          this.executeTerminalCommand(cmd);
+        }
         this.state.terminalCommandMode = false;
         this.state.terminalCommandBuffer = '';
         return;
@@ -236,6 +272,12 @@ export class SidebarApp {
     if (key.ctrl && key.key === 'u') {
       this.state.terminalCommandMode = true;
       this.state.terminalCommandBuffer = '';
+      return;
+    }
+
+    // Handle file diff view mode
+    if (this.state.fileDiffMode) {
+      this.handleFileDiffInput(key);
       return;
     }
 
@@ -327,6 +369,7 @@ export class SidebarApp {
         },
         toggleCollapsed: () => this.toggleCollapsed(),
         createTerminal: () => this.createTerminal(),
+        toggleDiffPane: () => this.toggleDiffPane(),
         render: () => this.render(),
       },
     };
@@ -647,7 +690,22 @@ export class SidebarApp {
         debugLog('createSession: in fullscreen mode, clearing hiddenPaneId to keep old session hidden');
         this.state.hiddenPaneId = null;
       } else if (currentSession) {
-        // Normal mode - break the current session pane
+        // Normal mode - break the current session's panes
+        // Break diff pane first (if any) to prevent duplicates
+        if (currentSession.diffPaneId) {
+          breakDiffPane(currentSession.diffPaneId);
+        }
+        // Break terminals if any
+        if (currentSession.terminals.length > 0) {
+          const activeTerminal = currentSession.terminals[currentSession.activeTerminalIndex];
+          if (activeTerminal) {
+            tmux.breakPane(activeTerminal.paneId);
+          }
+          if (currentSession.terminalBarPaneId) {
+            tmux.breakPane(currentSession.terminalBarPaneId);
+          }
+        }
+        // Break Claude pane
         tmux.breakPane(currentSession.paneId);
       }
 
@@ -665,6 +723,13 @@ export class SidebarApp {
       terminals: [],
       activeTerminalIndex: 0,
       terminalBarPaneId: null,
+      // Diff pane
+      diffPaneId: null,
+      diffPaneManuallyHidden: false,
+      diffViewMode: 'whole-file',
+      // File diff view panes
+      fileDiffHeaderPaneId: null,
+      fileDiffContentPaneId: null,
     };
 
     this.state.sessions.push(session);
@@ -674,19 +739,32 @@ export class SidebarApp {
     // Focus the Claude pane so user can start interacting immediately
     tmux.selectPane(paneId);
     this.render();
+
+    // Set up file watcher for this session's worktree
+    this.setupFileWatcher(worktree.path, session);
+
+    // Auto-open diff pane if there are changes in this worktree
+    this.autoOpenDiffPaneIfNeeded(session, worktree);
   }
 
-  private switchToSession(session: Session): void {
+  private async switchToSession(session: Session): Promise<void> {
     if (session.id === this.state.activeSessionId) {
       // Already active - focus pane
       tmux.selectPane(session.paneId);
       return;
     }
 
-    // Break current session's panes (Claude pane + terminals)
+    // Clean up file watcher for current session
+    this.cleanupFileWatcher();
+
+    // Break current session's panes (Claude pane + terminals + diff pane)
     const currentSession = this.state.sessions.find(s => s.id === this.state.activeSessionId);
     if (currentSession) {
-      // Break active terminal first (if any)
+      // Break diff pane first (if any)
+      if (currentSession.diffPaneId) {
+        breakDiffPane(currentSession.diffPaneId);
+      }
+      // Break active terminal (if any)
       if (currentSession.terminals.length > 0) {
         const activeTerminal = currentSession.terminals[currentSession.activeTerminalIndex];
         if (activeTerminal) {
@@ -703,6 +781,16 @@ export class SidebarApp {
 
     // Join new session's Claude pane
     tmux.joinPane(session.paneId, this.state.sidebarPaneId, true);
+
+    // Join diff pane if exists
+    if (session.diffPaneId) {
+      joinDiffPane(session.diffPaneId, session.paneId);
+      // Set up file watcher for new session
+      const worktree = this.state.worktrees.find(w => w.id === session.worktreeId);
+      if (worktree) {
+        this.setupFileWatcher(worktree.path, session);
+      }
+    }
 
     // Join terminal bar and active terminal if session has terminals
     if (session.terminals.length > 0 && session.terminalBarPaneId) {
@@ -736,6 +824,24 @@ export class SidebarApp {
     this.enforceSidebarWidth();
     tmux.selectPane(this.state.sidebarPaneId);
     this.render();
+
+    // Set up file watcher and potentially auto-open diff pane for the new session
+    const worktree = this.state.worktrees.find(w => w.id === session.worktreeId);
+    if (worktree) {
+      if (!session.diffPaneId) {
+        // Diff pane not open - check if we should auto-open
+        if (!session.diffPaneManuallyHidden) {
+          // Auto-open will set up watcher if it opens
+          await this.autoOpenDiffPaneIfNeeded(session, worktree);
+        }
+        // If diff pane still not open (either manually hidden or no changes),
+        // set up watcher for future auto-open
+        if (!session.diffPaneId) {
+          this.setupFileWatcher(worktree.path, session);
+        }
+      }
+      // If diff pane exists, watcher was already set up in joinDiffPane section above
+    }
   }
 
   private async deleteSelected(): Promise<void> {
@@ -750,6 +856,15 @@ export class SidebarApp {
   }
 
   private deleteSession(session: Session): void {
+    // Clean up file watcher if this is the active session
+    if (session.id === this.state.activeSessionId) {
+      this.cleanupFileWatcher();
+    }
+
+    // Kill diff pane
+    if (session.diffPaneId) {
+      closeDiffPane(session.diffPaneId);
+    }
     // Kill all terminal panes
     for (const terminal of session.terminals) {
       tmux.killPane(terminal.paneId);
@@ -777,6 +892,16 @@ export class SidebarApp {
         const nextSession = this.state.sessions[0];
         tmux.joinPane(nextSession.paneId, this.state.sidebarPaneId, true);
         this.state.activeSessionId = nextSession.id;
+
+        // Join diff pane if next session has one
+        if (nextSession.diffPaneId) {
+          joinDiffPane(nextSession.diffPaneId, nextSession.paneId);
+          // Set up file watcher for the new session
+          const worktree = this.state.worktrees.find(w => w.id === nextSession.worktreeId);
+          if (worktree) {
+            this.setupFileWatcher(worktree.path, nextSession);
+          }
+        }
 
         // Join terminal panes if next session has terminals
         if (nextSession.terminals.length > 0 && nextSession.terminalBarPaneId) {
@@ -1214,6 +1339,468 @@ export class SidebarApp {
   }
 
   // ==========================================================================
+  // Diff Pane Management
+  // ==========================================================================
+
+  /**
+   * Toggle the diff pane visibility
+   */
+  private async toggleDiffPane(): Promise<void> {
+    const session = this.state.sessions.find(s => s.id === this.state.activeSessionId);
+    if (!session) {
+      debugLog('toggleDiffPane: no active session');
+      return;
+    }
+
+    if (session.diffPaneId) {
+      // Close the diff pane
+      this.closeDiffPane(session);
+    } else {
+      // Open the diff pane
+      await this.openDiffPane(session);
+    }
+  }
+
+  /**
+   * Open the diff pane for a session
+   * @param manualOpen - True if user manually opened (toggle), false if auto-open
+   */
+  private async openDiffPane(session: Session, manualOpen: boolean = true): Promise<void> {
+    // Guard against double opening (race condition protection)
+    if (session.diffPaneId || this.diffPaneOpening) return;
+    this.diffPaneOpening = true;
+
+    try {
+      const worktree = this.state.worktrees.find(w => w.id === session.worktreeId);
+      if (!worktree) return;
+
+      debugLog('openDiffPane: creating diff pane for session', session.title, 'manual=' + manualOpen);
+
+      // Reset manually hidden flag when user opens it
+      if (manualOpen) {
+        session.diffPaneManuallyHidden = false;
+      }
+
+      // Get initial diff data
+      const files = await getDiffSummary(worktree.path);
+
+      // Create the diff pane to the right of the Claude pane
+      const diffPaneId = createDiffPane(this.state.sessionName, session.paneId);
+      session.diffPaneId = diffPaneId;
+
+      // Start the diff handler
+      startDiffHandler(diffPaneId, this.state.sidebarPaneId, session.id, worktree.path, files);
+
+      // Set up file watcher for auto-refresh
+      this.setupFileWatcher(worktree.path, session);
+
+      // Ensure sidebar stays at fixed width
+      this.enforceSidebarWidth();
+      tmux.selectPane(this.state.sidebarPaneId);
+      this.render();
+    } finally {
+      this.diffPaneOpening = false;
+    }
+  }
+
+  /**
+   * Auto-open diff pane if there are changes and not manually hidden
+   */
+  private async autoOpenDiffPaneIfNeeded(session: Session, worktree: Worktree): Promise<void> {
+    // Don't auto-open if already open or manually hidden
+    if (session.diffPaneId || session.diffPaneManuallyHidden) {
+      return;
+    }
+
+    // Check if there are changes in this worktree
+    const files = await getDiffSummary(worktree.path);
+    if (files.length > 0) {
+      debugLog('autoOpenDiffPaneIfNeeded: found', files.length, 'changed files, opening diff pane');
+      await this.openDiffPane(session, false);  // Auto-open, not manual
+    }
+  }
+
+  /**
+   * Close the diff pane for a session
+   * @param manualClose - True if user manually closed (toggle), false if system close
+   */
+  private closeDiffPane(session: Session, manualClose: boolean = true): void {
+    if (!session.diffPaneId) return;
+
+    debugLog('closeDiffPane: closing diff pane for session', session.title, 'manual=' + manualClose);
+
+    closeDiffPane(session.diffPaneId);
+    session.diffPaneId = null;
+
+    // Mark as manually hidden if user closed it (so it won't auto-reopen)
+    if (manualClose) {
+      session.diffPaneManuallyHidden = true;
+      // Also clean up file watcher when manually closed (user doesn't want auto-open)
+      this.cleanupFileWatcher();
+    }
+    // Note: Don't clean up file watcher if not manual close - it may be needed for auto-open
+
+    // Exit file diff mode if active
+    if (this.state.fileDiffMode) {
+      this.hideFileDiff();
+    }
+
+    this.enforceSidebarWidth();
+    tmux.selectPane(this.state.sidebarPaneId);
+    this.render();
+  }
+
+  /**
+   * Set up file watcher for auto-refresh and auto-open
+   */
+  private setupFileWatcher(repoPath: string, session: Session): void {
+    // Clean up any existing watcher
+    this.cleanupFileWatcher();
+
+    this.fileWatcherCleanup = watchForChanges(repoPath, async () => {
+      const files = await getDiffSummary(repoPath);
+
+      if (session.diffPaneId) {
+        // Diff pane is open - just update it
+        updateDiffPane(session.diffPaneId, files);
+      } else if (!session.diffPaneManuallyHidden && files.length > 0) {
+        // Diff pane is closed but not manually hidden and there are changes
+        // Auto-open the diff pane
+        debugLog('setupFileWatcher: detected changes, auto-opening diff pane');
+        await this.openDiffPane(session, false);  // Auto-open, not manual
+      }
+    });
+  }
+
+  /**
+   * Clean up file watcher
+   */
+  private cleanupFileWatcher(): void {
+    if (this.fileWatcherCleanup) {
+      this.fileWatcherCleanup();
+      this.fileWatcherCleanup = null;
+    }
+  }
+
+  /**
+   * Execute a diff command received from the diff pane handler
+   * Format: "DIFF:<action>:<data>"
+   */
+  private async executeDiffCommand(command: string): Promise<void> {
+    debugLog('executeDiffCommand:', command);
+
+    if (!command.startsWith('DIFF:')) return;
+
+    const parts = command.slice(5).split(':');
+    const action = parts[0];
+    const data = parts.slice(1).join(':'); // Rejoin in case filename has colons
+
+    const session = this.state.sessions.find(s => s.id === this.state.activeSessionId);
+
+    switch (action) {
+      case 'close':
+        if (session) {
+          this.closeDiffPane(session);
+        }
+        break;
+
+      case 'viewfile':
+        if (data && session) {
+          await this.showFileDiff(data, session);
+        }
+        break;
+
+      case 'refresh':
+        if (session && session.diffPaneId) {
+          const worktree = this.state.worktrees.find(w => w.id === session.worktreeId);
+          if (worktree) {
+            const files = await getDiffSummary(worktree.path);
+            updateDiffPane(session.diffPaneId, files);
+          }
+        }
+        break;
+    }
+  }
+
+  /**
+   * Show file diff view (replaces Claude pane + terminals with header + content panes)
+   *
+   * Architecture:
+   * - Claude pane is broken to background (process preserved)
+   * - Terminal panes are broken to background (if any)
+   * - Diff pane (file list sidebar) remains visible
+   * - Content pane shows full file with inline diffs (streaming)
+   * - 1-row header pane above content for "Back" button + filename
+   * - Content handler handles Esc key to close
+   */
+  private async showFileDiff(filename: string, session: Session): Promise<void> {
+    const worktree = this.state.worktrees.find(w => w.id === session.worktreeId);
+    if (!worktree) return;
+
+    debugLog('showFileDiff:', filename);
+
+    // Get stats for header
+    const files = await getDiffSummary(worktree.path);
+    const fileInfo = files.find(f => f.file === filename);
+    const insertions = fileInfo?.insertions || 0;
+    const deletions = fileInfo?.deletions || 0;
+
+    // If already viewing a file diff, just replace the content (don't break/join again)
+    if (this.state.fileDiffMode && session.fileDiffHeaderPaneId && session.fileDiffContentPaneId) {
+      debugLog('showFileDiff: replacing existing view');
+
+      // Break diff pane first (if exists) so we can recreate proper layout
+      const hadDiffPane = !!session.diffPaneId;
+      if (session.diffPaneId) {
+        breakDiffPane(session.diffPaneId);
+      }
+
+      // Kill existing header and content panes
+      closeFileDiffHeaderPane(session.fileDiffHeaderPaneId);
+      closeFileDiffContentPane(session.fileDiffContentPaneId);
+
+      // Create new content pane (to the right of sidebar)
+      const contentPaneId = createFileDiffContentPane(this.state.sessionName, this.state.sidebarPaneId);
+      session.fileDiffContentPaneId = contentPaneId;
+
+      // Rejoin diff pane FIRST (to the right of content) - BEFORE creating header
+      if (hadDiffPane && session.diffPaneId) {
+        joinDiffPane(session.diffPaneId, contentPaneId);
+      }
+
+      // NOW create new header pane (1-row above content only)
+      const headerPaneId = createFileDiffHeaderPane(this.state.sessionName, contentPaneId);
+      session.fileDiffHeaderPaneId = headerPaneId;
+
+      // Start header handler with new file info
+      startFileDiffHeaderHandler(headerPaneId, this.state.sidebarPaneId, filename, insertions, deletions, session.diffViewMode);
+
+      // Start content handler (streams full file with inline diffs, handles Esc)
+      startFileDiffContentHandler(contentPaneId, this.state.sidebarPaneId, worktree.path, filename, session.diffViewMode);
+
+      // Update state
+      this.state.fileDiffFilename = filename;
+
+      // Ensure sidebar width
+      this.enforceSidebarWidth();
+
+      // Focus the content pane
+      tmux.selectPane(contentPaneId);
+      return;
+    }
+
+    // First time opening - break Claude pane to background (preserve Claude CLI process)
+    tmux.breakPane(session.paneId);
+
+    // Also break terminals if any
+    if (session.terminals.length > 0) {
+      const activeTerminal = session.terminals[session.activeTerminalIndex];
+      if (activeTerminal) {
+        tmux.breakPane(activeTerminal.paneId);
+      }
+      if (session.terminalBarPaneId) {
+        tmux.breakPane(session.terminalBarPaneId);
+      }
+    }
+
+    // Break diff pane temporarily (we'll rejoin it BEFORE creating header)
+    const hadDiffPane = !!session.diffPaneId;
+    if (session.diffPaneId) {
+      breakDiffPane(session.diffPaneId);
+    }
+
+    // Create content pane (fills Claude pane's space, to the right of sidebar)
+    const contentPaneId = createFileDiffContentPane(this.state.sessionName, this.state.sidebarPaneId);
+    session.fileDiffContentPaneId = contentPaneId;
+
+    // Rejoin diff pane FIRST (to the right of content) - BEFORE creating header
+    // This ensures header only spans content area, not the diff sidebar
+    if (hadDiffPane && session.diffPaneId) {
+      joinDiffPane(session.diffPaneId, contentPaneId);
+    }
+
+    // NOW create 1-row header pane above content pane (after diff pane is positioned)
+    const headerPaneId = createFileDiffHeaderPane(this.state.sessionName, contentPaneId);
+    session.fileDiffHeaderPaneId = headerPaneId;
+
+    // Start header handler in header pane
+    startFileDiffHeaderHandler(headerPaneId, this.state.sidebarPaneId, filename, insertions, deletions, session.diffViewMode);
+
+    // Start content handler (streams full file with inline diffs, handles Esc)
+    startFileDiffContentHandler(contentPaneId, this.state.sidebarPaneId, worktree.path, filename, session.diffViewMode);
+
+    // Update state
+    this.state.fileDiffMode = true;
+    this.state.fileDiffFilename = filename;
+
+    // Ensure sidebar stays at fixed width
+    this.enforceSidebarWidth();
+
+    // Focus the content pane (content handler handles Esc)
+    tmux.selectPane(contentPaneId);
+
+    this.render();
+  }
+
+  /**
+   * Hide file diff view and restore Claude pane
+   *
+   * New architecture:
+   * - Kill header + content panes
+   * - Join Claude pane back from background
+   * - Restore diff pane and terminals if any
+   */
+  private hideFileDiff(): void {
+    if (!this.state.fileDiffMode) return;
+
+    debugLog('hideFileDiff');
+
+    const session = this.state.sessions.find(s => s.id === this.state.activeSessionId);
+    if (!session) return;
+
+    // 1. Kill header pane
+    if (session.fileDiffHeaderPaneId) {
+      closeFileDiffHeaderPane(session.fileDiffHeaderPaneId);
+      session.fileDiffHeaderPaneId = null;
+    }
+
+    // 2. Kill content pane
+    if (session.fileDiffContentPaneId) {
+      closeFileDiffContentPane(session.fileDiffContentPaneId);
+      session.fileDiffContentPaneId = null;
+    }
+
+    // 3. Join Claude pane back (was broken to background)
+    tmux.joinPane(session.paneId, this.state.sidebarPaneId, true);
+
+    // 4. Restore diff pane if it exists
+    if (session.diffPaneId) {
+      joinDiffPane(session.diffPaneId, session.paneId);
+    }
+
+    // 5. Restore terminals if any
+    if (session.terminals.length > 0 && session.terminalBarPaneId) {
+      tmux.joinPane(session.terminalBarPaneId, session.paneId, false);
+      const activeTerminal = session.terminals[session.activeTerminalIndex];
+      if (activeTerminal) {
+        tmux.joinPane(activeTerminal.paneId, session.terminalBarPaneId, false);
+      }
+      tmux.resizePane(session.terminalBarPaneId, undefined, TERMINAL_BAR_HEIGHT);
+    }
+
+    // 6. Clear state
+    this.state.fileDiffMode = false;
+    this.state.fileDiffFilename = null;
+
+    this.enforceSidebarWidth();
+    tmux.selectPane(this.state.sidebarPaneId);
+    this.render();
+  }
+
+  /**
+   * Handle input in file diff view mode
+   * With the new architecture, scrolling is handled natively by `less`.
+   * The sidebar only handles Escape to close.
+   */
+  private handleFileDiffInput(key: { key: string; ctrl: boolean }): void {
+    // Escape: close file diff view
+    if (key.key === 'escape') {
+      this.hideFileDiff();
+      return;
+    }
+    // Other keys are passed through to sidebar's normal handling
+  }
+
+  /**
+   * Execute a file diff command received from the file diff header handler
+   * Format: "FILEDIFF:<action>" or "FILEDIFF:mode:<mode>"
+   */
+  private executeFileDiffCommand(command: string): void {
+    debugLog('executeFileDiffCommand:', command);
+
+    if (!command.startsWith('FILEDIFF:')) return;
+
+    const action = command.slice(9); // Remove "FILEDIFF:" prefix
+
+    switch (action) {
+      case 'close':
+        this.hideFileDiff();
+        break;
+      case 'mode:diffs-only':
+        this.setDiffViewMode('diffs-only');
+        break;
+      case 'mode:whole-file':
+        this.setDiffViewMode('whole-file');
+        break;
+    }
+  }
+
+  /**
+   * Set the diff view mode and recreate the file diff panes
+   */
+  private async setDiffViewMode(mode: DiffViewMode): Promise<void> {
+    const session = this.state.sessions.find(s => s.id === this.state.activeSessionId);
+    if (!session || !this.state.fileDiffMode || !this.state.fileDiffFilename) return;
+
+    // Already in this mode
+    if (session.diffViewMode === mode) return;
+
+    debugLog('setDiffViewMode:', mode);
+
+    const worktree = this.state.worktrees.find(w => w.id === session.worktreeId);
+    if (!worktree) return;
+
+    // Update mode in session
+    session.diffViewMode = mode;
+
+    // Get stats for header
+    const files = await getDiffSummary(worktree.path);
+    const fileInfo = files.find(f => f.file === this.state.fileDiffFilename);
+    const insertions = fileInfo?.insertions || 0;
+    const deletions = fileInfo?.deletions || 0;
+    const filename = this.state.fileDiffFilename;
+
+    // Break diff pane first (if exists) so we can recreate proper layout
+    const hadDiffPane = !!session.diffPaneId;
+    if (session.diffPaneId) {
+      breakDiffPane(session.diffPaneId);
+    }
+
+    // Kill existing header and content panes
+    if (session.fileDiffHeaderPaneId) {
+      closeFileDiffHeaderPane(session.fileDiffHeaderPaneId);
+    }
+    if (session.fileDiffContentPaneId) {
+      closeFileDiffContentPane(session.fileDiffContentPaneId);
+    }
+
+    // Create new content pane (to the right of sidebar)
+    const contentPaneId = createFileDiffContentPane(this.state.sessionName, this.state.sidebarPaneId);
+    session.fileDiffContentPaneId = contentPaneId;
+
+    // Rejoin diff pane FIRST (to the right of content) - BEFORE creating header
+    if (hadDiffPane && session.diffPaneId) {
+      joinDiffPane(session.diffPaneId, contentPaneId);
+    }
+
+    // NOW create new header pane (1-row above content only)
+    const headerPaneId = createFileDiffHeaderPane(this.state.sessionName, contentPaneId);
+    session.fileDiffHeaderPaneId = headerPaneId;
+
+    // Start header handler with new mode
+    startFileDiffHeaderHandler(headerPaneId, this.state.sidebarPaneId, filename, insertions, deletions, mode);
+
+    // Start content handler with new mode
+    startFileDiffContentHandler(contentPaneId, this.state.sidebarPaneId, worktree.path, filename, mode);
+
+    // Ensure sidebar width
+    this.enforceSidebarWidth();
+
+    // Focus the content pane
+    tmux.selectPane(contentPaneId);
+  }
+
+  // ==========================================================================
   // Fullscreen Modal Management
   // ==========================================================================
 
@@ -1226,11 +1813,15 @@ export class SidebarApp {
     debugLog('enterFullscreenModal: hiding panes');
 
     if (this.state.activeSessionId) {
-      // Hide the active session's panes (Claude pane + terminals)
+      // Hide the active session's panes (Claude pane + terminals + diff pane)
       const activeSession = this.state.sessions.find(s => s.id === this.state.activeSessionId);
       if (activeSession) {
         try {
-          // Break active terminal first (if any)
+          // Break diff pane first (if any)
+          if (activeSession.diffPaneId) {
+            breakDiffPane(activeSession.diffPaneId);
+          }
+          // Break active terminal (if any)
           if (activeSession.terminals.length > 0) {
             const activeTerminal = activeSession.terminals[activeSession.activeTerminalIndex];
             if (activeTerminal) {
@@ -1277,8 +1868,15 @@ export class SidebarApp {
         tmux.joinPane(this.state.hiddenPaneId, this.state.sidebarPaneId, true);
         debugLog('exitFullscreenModal: joined Claude pane');
 
-        // If active session has terminals, join those too
         const activeSession = this.state.sessions.find(s => s.id === this.state.activeSessionId);
+
+        // Join diff pane if it exists (to the right of Claude pane)
+        if (activeSession && activeSession.diffPaneId) {
+          joinDiffPane(activeSession.diffPaneId, activeSession.paneId);
+          debugLog('exitFullscreenModal: joined diff pane');
+        }
+
+        // If active session has terminals, join those too
         if (activeSession && activeSession.terminals.length > 0 && activeSession.terminalBarPaneId) {
           // Join terminal bar below Claude pane
           tmux.joinPane(activeSession.terminalBarPaneId, activeSession.paneId, false);

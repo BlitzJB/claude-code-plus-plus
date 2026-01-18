@@ -165,11 +165,12 @@ export function renderMain(state: SidebarState): string {
   output += `${ansi.fg.cyan}${UI_TEXT.NEW_WORKTREE_BUTTON}${ansi.reset}\n`;
 
   // Help at bottom
-  output += ansi.moveTo(rows - 8, 1);
+  output += ansi.moveTo(rows - 9, 1);
   output += `${ansi.dim}${'─'.repeat(cols - 1)}${ansi.reset}\n`;
   output += `${ansi.fg.cyan}↵${ansi.reset}  ${ansi.dim}new session${ansi.reset}\n`;
   output += `${ansi.fg.cyan}n${ansi.reset}  ${ansi.dim}new worktree${ansi.reset}\n`;
   output += `${ansi.fg.cyan}^T${ansi.reset} ${ansi.dim}terminal${ansi.reset}\n`;
+  output += `${ansi.fg.cyan}^D${ansi.reset} ${ansi.dim}diff${ansi.reset}\n`;
   output += `${ansi.fg.cyan}d${ansi.reset}  ${ansi.dim}delete${ansi.reset}\n`;
   output += `${ansi.fg.cyan}r${ansi.reset}  ${ansi.dim}rename${ansi.reset}\n`;
   output += `${ansi.fg.cyan}^Q${ansi.reset} ${ansi.dim}quit${ansi.reset}\n`;

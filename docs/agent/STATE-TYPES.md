@@ -11,6 +11,17 @@ This document covers all type definitions, interfaces, and constants used in Cla
 
 ## Core Types (`src/types.ts`)
 
+### DiffViewMode
+
+Toggle mode for file diff viewing.
+
+```typescript
+type DiffViewMode = 'diffs-only' | 'whole-file';
+```
+
+- `'whole-file'`: Shows complete file with inline diff markers (default)
+- `'diffs-only'`: Shows only diff hunks with context (compact view)
+
 ### Worktree
 
 Represents a git worktree (or the main repository).
@@ -64,6 +75,15 @@ interface Session {
   terminals: Terminal[];         // Array of terminals in this session
   activeTerminalIndex: number;   // Index of currently visible terminal
   terminalBarPaneId: string | null;  // Tmux pane ID for 1-row terminal bar
+
+  // Diff pane
+  diffPaneId: string | null;            // Diff pane ID (file list sidebar)
+  diffPaneManuallyHidden: boolean;      // True if user manually closed diff pane
+  diffViewMode: DiffViewMode;           // View mode for file diff: 'diffs-only' or 'whole-file'
+
+  // File diff view panes (when viewing individual file diff)
+  fileDiffHeaderPaneId: string | null;   // The 1-row header pane
+  fileDiffContentPaneId: string | null;  // The pane showing file content
 }
 ```
 

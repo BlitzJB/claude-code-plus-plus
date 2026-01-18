@@ -36,6 +36,7 @@ export interface CommandActions {
   // Actions
   toggleCollapsed: () => void;
   createTerminal: () => void;
+  toggleDiffPane: () => void;
   render: () => void;
 }
 
@@ -112,6 +113,18 @@ export const MAIN_COMMANDS: Array<{ combo: KeyCombo; command: Command }> = [
       description: 'Create new terminal',
       handler: (ctx) => {
         ctx.actions.createTerminal();
+        return true;
+      },
+    },
+  },
+
+  // Diff pane
+  {
+    combo: { key: 'd', ctrl: true },
+    command: {
+      description: 'Toggle diff pane',
+      handler: (ctx) => {
+        ctx.actions.toggleDiffPane();
         return true;
       },
     },

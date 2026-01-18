@@ -37,6 +37,9 @@ breakSessionPanes(session: Session): void
 Parameters: session
 State changes: Pane layout (panes moved to background)
 
+└─ If session has diff pane:
+│   └─ Break diff pane
+│
 └─ If session has terminals:
 │   └─ Break active terminal pane
 │   └─ Break terminal bar pane
@@ -55,6 +58,13 @@ State changes: Pane layout
 
 └─ Join Claude pane to sidebar (horizontal)
 │   └─ joinPane(session.paneId, sidebarPaneId, true)
+│
+└─ If session has diff pane:
+│   └─ Join diff pane to right of Claude
+│   │   └─ joinPane(diffPaneId, session.paneId, true)
+│   │
+│   └─ Resize diff pane to DIFF_PANE_WIDTH
+│       └─ resizePane(diffPaneId, DIFF_PANE_WIDTH)
 │
 └─ If session has terminals:
     └─ Join terminal bar below Claude
@@ -205,6 +215,45 @@ State changes: fullscreenModal = false, hiddenPaneId = null, pane layout
 └─────────────────────┴──────────────────────────────────────┘
 ```
 
+### Normal State (With Diff Pane)
+
+```
+┌─────────────────────┬────────────────────────┬─────────────────┐
+│                     │                        │                 │
+│     Sidebar         │      Claude Pane       │   Diff Pane     │
+│    (25 cols)        │                        │   (30 cols)     │
+│                     │                        │                 │
+│                     │                        │  Changed Files: │
+│                     │                        │  M file1.ts +22 │
+│                     │                        │  A file2.ts +45 │
+│                     │                        │                 │
+└─────────────────────┴────────────────────────┴─────────────────┘
+```
+
+### File Diff View Mode
+
+When a file is selected in the diff pane, Claude pane is broken to background and replaced with header + content panes.
+
+```
+┌─────────────┬────────────────────────────┬─────────────────┐
+│   Sidebar   │ [1-row] ← Back │ file.ts   │   Diff Pane     │
+│  (25 cols)  ├────────────────────────────┤   (30 cols)     │
+│             │                            │                 │
+│  Worktrees  │  Full file content with    │  Changed Files: │
+│  Sessions   │  inline diffs (colored)    │ >M file1.ts +22 │
+│             │  Uses native `less` scroll │  A file2.ts +45 │
+│             │                            │                 │
+└─────────────┴────────────────────────────┴─────────────────┘
+```
+
+**Key differences from Normal Mode:**
+- Sidebar remains visible and unchanged
+- Claude pane is broken to background (process preserved)
+- 1-row header pane shows "← Back" button + filename + stats
+- Content pane runs `less -R` on temp file with colored diff
+- Native scrolling via `less` (arrow keys, j/k, mouse wheel, etc.)
+- On close: kill header + content panes, join Claude pane back
+
 ### Fullscreen Modal State
 
 ```
@@ -242,15 +291,22 @@ cols
 ### Session Switch (A → B)
 
 ```
-1. breakSessionPanes(sessionA)
-   └─ Session A panes go to background
+1. cleanupFileWatcher()
+   └─ Stop watching for file changes
 
-2. joinSessionPanes(sessionB, sidebarPaneId, sessionName)
+2. breakSessionPanes(sessionA)
+   └─ Session A panes go to background (diff, terminals, Claude)
+
+3. joinSessionPanes(sessionB, sidebarPaneId, sessionName)
    └─ Claude pane joins right of sidebar
+   └─ If diff pane: joins right of Claude, resize to 30 cols
    └─ If terminals: bar joins below Claude, terminal below bar
    └─ Resize hook re-established
 
-3. State: activeSessionId = sessionB.id
+4. If session B has diff pane:
+   └─ setupFileWatcher(worktreePath, sessionB)
+
+5. State: activeSessionId = sessionB.id
 ```
 
 ### Enter Fullscreen Modal
@@ -322,5 +378,5 @@ After updating:
 3. Update "Last Updated" timestamp
 
 ---
-**Last Updated:** 2025-01-18
-**Files Covered:** `src/sidebar/pane-orchestrator.ts`, `src/sidebar/app.ts`
+**Last Updated:** 2026-01-18
+**Files Covered:** `src/sidebar/pane-orchestrator.ts`, `src/sidebar/app.ts`, `src/diff/diff-manager.ts`

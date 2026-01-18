@@ -101,6 +101,7 @@ interface CommandActions {
   showRenameModal: () => void;
   toggleCollapsed: () => void;
   createTerminal: () => void;
+  toggleDiffPane: () => void;
   render: () => void;
 }
 ```
@@ -120,6 +121,10 @@ const MAIN_COMMANDS: Command[] = [
   // Create terminal
   { keys: [{ key: 't', ctrl: true }],
     handler: (ctx) => ctx.actions.createTerminal() },
+
+  // Toggle diff pane
+  { keys: [{ key: 'd', ctrl: true }],
+    handler: (ctx) => ctx.actions.toggleDiffPane() },
 
   // Navigation
   { keys: [{ key: 'up' }, { key: 'k' }],
@@ -187,6 +192,7 @@ Returns: true if command was executed
 | `Ctrl+C` | Show quit modal | `showQuitModal()` |
 | `Ctrl+G` | Toggle collapse | `toggleCollapsed()` |
 | `Ctrl+T` | Create terminal | `createTerminal()` |
+| `Ctrl+D` | Toggle diff pane | `toggleDiffPane()` |
 | `↑` / `k` | Move selection up | `moveUp()` |
 | `↓` / `j` | Move selection down | `moveDown()` |
 | `Enter` | Activate selected | `activateSelected()` |
@@ -233,6 +239,30 @@ Returns: true if command was executed
 | `d` | Delete current terminal |
 | `Enter` | Focus terminal pane |
 | `Escape` | Focus sidebar |
+
+### Diff Pane Hotkeys (Right Sidebar)
+
+| Key | Action |
+|-----|--------|
+| `↑` / `k` | Move selection up |
+| `↓` / `j` | Move selection down |
+| `g` | Go to top |
+| `G` | Go to bottom |
+| `Enter` | View selected file diff |
+| `r` | Refresh diff |
+| `Escape` / `q` | Close diff pane |
+
+### File Diff View Hotkeys
+
+| Key | Action |
+|-----|--------|
+| `↑` / `k` | Scroll up |
+| `↓` / `j` | Scroll down |
+| `g` | Go to top |
+| `G` | Go to bottom |
+| `Ctrl+D` / `PageDown` | Page down |
+| `Ctrl+U` / `PageUp` | Page up |
+| `Escape` / `Enter` / `Backspace` | Return to Claude |
 
 ---
 
@@ -352,5 +382,5 @@ After updating:
 3. Update "Last Updated" timestamp
 
 ---
-**Last Updated:** 2025-01-18
-**Files Covered:** `src/sidebar/commands.ts`, `src/sidebar/input.ts`
+**Last Updated:** 2026-01-18
+**Files Covered:** `src/sidebar/commands.ts`, `src/sidebar/input.ts`, `src/diff/diff-handler.ts`

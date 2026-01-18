@@ -21,6 +21,7 @@ export {
   selectPane,
   resizePane,
   killPane,
+  respawnPane,
   swapPanes,
   breakPane,
   joinPane,
