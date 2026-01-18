@@ -1,6 +1,6 @@
 {
   "name": "claude-code-plus-plus",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "Multi-pane terminal interface for parallel Claude Code agents with git worktree isolation",
   "type": "commonjs",
   "main": "dist/index.js",
@@ -17,7 +17,6 @@
   },
   "files": [
     "dist/**/*",
-    "assets/**/*",
     "README.md",
     "LICENSE"
   ],
