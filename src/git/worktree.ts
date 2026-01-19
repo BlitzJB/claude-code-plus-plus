@@ -5,7 +5,7 @@
 import { simpleGit, SimpleGit } from 'simple-git';
 import { homedir } from 'os';
 import { join, basename, relative } from 'path';
-import { mkdir, rm, access, readdir, stat, cp } from 'fs/promises';
+import { mkdir, rm, access, readdir, stat } from 'fs/promises';
 import type { Worktree } from '../types';
 
 // ============================================================================
@@ -85,19 +85,19 @@ export class WorktreeManager {
   }
 
   /**
-   * Copy nested git repos to worktree
+   * Create worktrees for nested git repos (recursively)
    *
-   * If parent tracks nested repo contents: only copy .git (files already exist)
-   * If parent doesn't track contents: copy entire repo (files + .git)
-   *
-   * Skips directories that already have .git (e.g., initialized submodules)
+   * Uses native git worktree for each nested repo:
+   * - Shares git objects (no duplication)
+   * - Fast creation
+   * - Full isolation between worktrees
+   * - Recursively handles nested repos within nested repos
    */
-  private async copyNestedGitRepos(sourcePath: string, destPath: string): Promise<void> {
+  private async setupNestedGitRepos(sourcePath: string, destPath: string): Promise<void> {
     const nestedRepos = await this.findNestedGitRepos(sourcePath);
 
     for (const repoRelPath of nestedRepos) {
       const srcRepo = join(sourcePath, repoRelPath);
-      const srcGit = join(srcRepo, '.git');
       const destRepo = join(destPath, repoRelPath);
       const destGit = join(destRepo, '.git');
 
@@ -105,40 +105,30 @@ export class WorktreeManager {
         // Skip if destination already has .git (e.g., submodule was already initialized)
         try {
           await access(destGit);
-          // .git exists, skip to avoid overwriting submodule gitlink
           continue;
         } catch {
-          // .git doesn't exist, proceed with copy
+          // .git doesn't exist, proceed
         }
 
-        // Check if destination directory exists and has content
-        let destIsEmpty = true;
+        // Create worktree for the nested repo
+        // Use detached HEAD to avoid "branch already checked out" error
+        const nestedGit = simpleGit(srcRepo);
+        const head = await nestedGit.revparse(['HEAD']);
+        await nestedGit.raw(['worktree', 'add', '--detach', destRepo, head.trim()]);
+
+        // Initialize submodules in the nested worktree
         try {
-          await access(destRepo);
-          const entries = await readdir(destRepo);
-          // Filter out .git if somehow present
-          const contentEntries = entries.filter(e => e !== '.git');
-          destIsEmpty = contentEntries.length === 0;
+          const nestedWorktreeGit = simpleGit(destRepo);
+          await nestedWorktreeGit.submoduleUpdate(['--init', '--recursive']);
         } catch {
-          // Directory doesn't exist
-          destIsEmpty = true;
+          // Submodule update may fail if no submodules exist
         }
 
-        if (destIsEmpty) {
-          // Parent doesn't track nested repo contents - copy entire repo
-          await cp(srcRepo, destRepo, { recursive: true });
-        } else {
-          // Parent tracks contents - only copy .git
-          const srcGitStat = await stat(srcGit);
-          if (srcGitStat.isDirectory()) {
-            await cp(srcGit, destGit, { recursive: true });
-          } else {
-            // .git is a file (gitlink for worktrees/submodules) - copy as file
-            await cp(srcGit, destGit);
-          }
-        }
-      } catch {
-        // Failed to copy, skip this repo
+        // Recursively setup any nested repos within this nested repo
+        await this.setupNestedGitRepos(srcRepo, destRepo);
+      } catch (err) {
+        // Log error but continue with other nested repos
+        console.error(`Failed to create worktree for nested repo ${repoRelPath}:`, err);
       }
     }
   }
@@ -211,9 +201,9 @@ export class WorktreeManager {
       // Submodule update may fail if no submodules exist, that's OK
     }
 
-    // Copy nested git repos (directories with .git that aren't submodules)
-    // These are independent repos that git worktree doesn't handle
-    await this.copyNestedGitRepos(this.repoPath, worktreePath);
+    // Setup nested git repos using native worktrees (efficient, shares objects)
+    // Falls back to copying if worktree creation fails
+    await this.setupNestedGitRepos(this.repoPath, worktreePath);
 
     return {
       id: this.generateId(),
