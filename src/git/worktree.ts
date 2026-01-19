@@ -9,6 +9,15 @@ import { mkdir, rm, access, readdir, stat } from 'fs/promises';
 import type { Worktree } from '../types';
 
 // ============================================================================
+// Types
+// ============================================================================
+
+export interface WorktreeCreateResult {
+  worktree: Worktree;
+  warnings: string[];  // e.g., "Failed to setup nested repo: packages/foo"
+}
+
+// ============================================================================
 // Worktree Manager
 // ============================================================================
 
@@ -92,9 +101,12 @@ export class WorktreeManager {
    * - Fast creation
    * - Full isolation between worktrees
    * - Recursively handles nested repos within nested repos
+   *
+   * @returns Array of failed nested repo paths (for warning purposes)
    */
-  private async setupNestedGitRepos(sourcePath: string, destPath: string): Promise<void> {
+  private async setupNestedGitRepos(sourcePath: string, destPath: string): Promise<string[]> {
     const nestedRepos = await this.findNestedGitRepos(sourcePath);
+    const failures: string[] = [];
 
     for (const repoRelPath of nestedRepos) {
       const srcRepo = join(sourcePath, repoRelPath);
@@ -125,12 +137,16 @@ export class WorktreeManager {
         }
 
         // Recursively setup any nested repos within this nested repo
-        await this.setupNestedGitRepos(srcRepo, destRepo);
+        const nestedFailures = await this.setupNestedGitRepos(srcRepo, destRepo);
+        failures.push(...nestedFailures);
       } catch (err) {
-        // Log error but continue with other nested repos
+        // Record failure and continue with other nested repos
+        failures.push(repoRelPath);
         console.error(`Failed to create worktree for nested repo ${repoRelPath}:`, err);
       }
     }
+
+    return failures;
   }
 
   /**
@@ -179,8 +195,9 @@ export class WorktreeManager {
 
   /**
    * Create a new worktree
+   * Returns the worktree and any warnings about failed nested repo setups
    */
-  async create(branch: string, newBranch: boolean = false): Promise<Worktree> {
+  async create(branch: string, newBranch: boolean = false): Promise<WorktreeCreateResult> {
     await this.ensureBaseDir();
 
     const sanitizedBranch = branch.replace(/[^a-zA-Z0-9-_]/g, '-');
@@ -202,14 +219,19 @@ export class WorktreeManager {
     }
 
     // Setup nested git repos using native worktrees (efficient, shares objects)
-    // Falls back to copying if worktree creation fails
-    await this.setupNestedGitRepos(this.repoPath, worktreePath);
+    const nestedFailures = await this.setupNestedGitRepos(this.repoPath, worktreePath);
+
+    // Build warnings for any nested repo failures
+    const warnings = nestedFailures.map(path => `Failed to setup nested repo: ${path}`);
 
     return {
-      id: this.generateId(),
-      path: worktreePath,
-      branch,
-      isMain: false,
+      worktree: {
+        id: this.generateId(),
+        path: worktreePath,
+        branch,
+        isMain: false,
+      },
+      warnings,
     };
   }
 

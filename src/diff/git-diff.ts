@@ -638,8 +638,16 @@ export async function getDiffsOnlyView(repoPath: string, filename: string): Prom
 /**
  * Watch for file changes in a repository
  * Returns a cleanup function to stop watching
+ *
+ * @param repoPath - Path to the repository to watch
+ * @param callback - Called when changes are detected (can be async)
+ * @param onError - Optional error handler for async callback failures
  */
-export function watchForChanges(repoPath: string, callback: () => void): () => void {
+export function watchForChanges(
+  repoPath: string,
+  callback: () => void | Promise<void>,
+  onError?: (error: Error) => void
+): () => void {
   let debounceTimer: NodeJS.Timeout | null = null;
   let watcher: FSWatcher | null = null;
 
@@ -647,8 +655,17 @@ export function watchForChanges(repoPath: string, callback: () => void): () => v
     if (debounceTimer) {
       clearTimeout(debounceTimer);
     }
-    debounceTimer = setTimeout(() => {
-      callback();
+    debounceTimer = setTimeout(async () => {
+      try {
+        await callback();
+      } catch (err) {
+        // Call error handler if provided, otherwise log to console
+        if (onError) {
+          onError(err instanceof Error ? err : new Error(String(err)));
+        } else {
+          console.error('watchForChanges callback error:', err);
+        }
+      }
     }, 500);
   };
 

@@ -2,4 +2,4 @@
  * Git Module
  */
 
-export { WorktreeManager, createWorktreeManager } from './worktree';
+export { WorktreeManager, createWorktreeManager, type WorktreeCreateResult } from './worktree';

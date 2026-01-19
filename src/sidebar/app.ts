@@ -644,10 +644,17 @@ export class SidebarApp {
 
   private async createWorktree(branchName: string): Promise<void> {
     try {
-      const worktree = await this.worktreeManager.create(branchName, true);
-      this.state.worktrees.push(worktree);
+      const result = await this.worktreeManager.create(branchName, true);
+      this.state.worktrees.push(result.worktree);
       this.state.selectedIndex = this.getMaxIndex();
       this.render();
+
+      // Show warning if nested repo setup had failures
+      if (result.warnings.length > 0) {
+        const warningMsg = `Worktree created with warnings:\n${result.warnings.join('\n')}`;
+        logger.warn(warningMsg);
+        this.showError(warningMsg);
+      }
     } catch (err) {
       logger.error('Failed to create worktree', err);
       this.showError(`Failed to create worktree: ${getErrorMessage(err)}`);
@@ -1457,19 +1464,27 @@ export class SidebarApp {
     // Clean up any existing watcher
     this.cleanupFileWatcher();
 
-    this.fileWatcherCleanup = watchForChanges(repoPath, async () => {
-      const files = await getDiffSummary(repoPath);
+    this.fileWatcherCleanup = watchForChanges(
+      repoPath,
+      async () => {
+        const files = await getDiffSummary(repoPath);
 
-      if (session.diffPaneId) {
-        // Diff pane is open - just update it
-        updateDiffPane(session.diffPaneId, files);
-      } else if (!session.diffPaneManuallyHidden && files.length > 0) {
-        // Diff pane is closed but not manually hidden and there are changes
-        // Auto-open the diff pane
-        debugLog('setupFileWatcher: detected changes, auto-opening diff pane');
-        await this.openDiffPane(session, false);  // Auto-open, not manual
+        if (session.diffPaneId) {
+          // Diff pane is open - just update it
+          updateDiffPane(session.diffPaneId, files);
+        } else if (!session.diffPaneManuallyHidden && files.length > 0) {
+          // Diff pane is closed but not manually hidden and there are changes
+          // Auto-open the diff pane
+          debugLog('setupFileWatcher: detected changes, auto-opening diff pane');
+          await this.openDiffPane(session, false);  // Auto-open, not manual
+        }
+      },
+      (err) => {
+        // Handle file watcher callback errors
+        logger.error('File watcher error:', err.message);
+        this.showError(`File watcher error: ${err.message}`);
       }
-    });
+    );
   }
 
   /**
@@ -1837,7 +1852,8 @@ export class SidebarApp {
           this.state.hiddenPaneId = activeSession.paneId;
           debugLog('enterFullscreenModal: broke session panes');
         } catch (err) {
-          debugLog('enterFullscreenModal: failed to break panes', err);
+          // Log error but continue - modal will still work, just not fullscreen
+          logger.error('enterFullscreenModal: failed to break panes:', getErrorMessage(err));
         }
       }
     } else {
@@ -1847,7 +1863,8 @@ export class SidebarApp {
         this.state.hiddenPaneId = this.state.mainPaneId;
         debugLog('enterFullscreenModal: broke main pane');
       } catch (err) {
-        debugLog('enterFullscreenModal: failed to break main pane', err);
+        // Log error but continue - modal will still work, just not fullscreen
+        logger.error('enterFullscreenModal: failed to break main pane:', getErrorMessage(err));
       }
     }
 
@@ -1897,7 +1914,9 @@ export class SidebarApp {
 
         this.enforceSidebarWidth();
       } catch (err) {
-        debugLog('exitFullscreenModal: failed to join panes', err);
+        // Log error - UI layout may be corrupted but we continue
+        // Showing error modal here would be recursive
+        logger.error('exitFullscreenModal: failed to join panes:', getErrorMessage(err));
       }
       this.state.hiddenPaneId = null;
     }
