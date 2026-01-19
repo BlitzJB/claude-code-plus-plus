@@ -88,6 +88,8 @@ export class WorktreeManager {
    * Copy nested git repos' .git directories to worktree
    * This preserves the nested repo's git history without duplicating files
    * (files already exist from parent's worktree)
+   *
+   * Skips directories that already have .git (e.g., initialized submodules)
    */
   private async copyNestedGitRepos(sourcePath: string, destPath: string): Promise<void> {
     const nestedRepos = await this.findNestedGitRepos(sourcePath);
@@ -97,6 +99,15 @@ export class WorktreeManager {
       const destGit = join(destPath, repoRelPath, '.git');
 
       try {
+        // Skip if destination already has .git (e.g., submodule was already initialized)
+        try {
+          await access(destGit);
+          // .git exists, skip to avoid overwriting submodule gitlink
+          continue;
+        } catch {
+          // .git doesn't exist, proceed with copy
+        }
+
         // Check if destination directory exists (it should, from parent's tracked files)
         const destRepo = join(destPath, repoRelPath);
         try {
