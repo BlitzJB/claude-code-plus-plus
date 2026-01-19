@@ -4,8 +4,8 @@
 
 import { simpleGit, SimpleGit } from 'simple-git';
 import { homedir } from 'os';
-import { join, basename } from 'path';
-import { mkdir, rm, access } from 'fs/promises';
+import { join, basename, relative } from 'path';
+import { mkdir, rm, access, readdir, stat, cp } from 'fs/promises';
 import type { Worktree } from '../types';
 
 // ============================================================================
@@ -38,6 +38,85 @@ export class WorktreeManager {
       await access(this.basePath);
     } catch {
       await mkdir(this.basePath, { recursive: true });
+    }
+  }
+
+  /**
+   * Find nested git repositories (not submodules, just directories with .git)
+   * Returns relative paths from repoPath
+   */
+  private async findNestedGitRepos(dir: string, basePath: string = dir): Promise<string[]> {
+    const nestedRepos: string[] = [];
+
+    try {
+      const entries = await readdir(dir, { withFileTypes: true });
+
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+
+        const fullPath = join(dir, entry.name);
+        const relativePath = relative(basePath, fullPath);
+
+        // Skip the main .git directory and node_modules
+        if (entry.name === '.git' || entry.name === 'node_modules') continue;
+
+        // Check if this directory is a git repo (has .git inside)
+        const gitPath = join(fullPath, '.git');
+        try {
+          const gitStat = await stat(gitPath);
+          if (gitStat.isDirectory() || gitStat.isFile()) {
+            // Found a nested git repo - don't recurse into it
+            nestedRepos.push(relativePath);
+            continue;
+          }
+        } catch {
+          // No .git here, continue searching
+        }
+
+        // Recurse into subdirectory
+        const nested = await this.findNestedGitRepos(fullPath, basePath);
+        nestedRepos.push(...nested);
+      }
+    } catch {
+      // Permission denied or other error, skip
+    }
+
+    return nestedRepos;
+  }
+
+  /**
+   * Copy nested git repos' .git directories to worktree
+   * This preserves the nested repo's git history without duplicating files
+   * (files already exist from parent's worktree)
+   */
+  private async copyNestedGitRepos(sourcePath: string, destPath: string): Promise<void> {
+    const nestedRepos = await this.findNestedGitRepos(sourcePath);
+
+    for (const repoRelPath of nestedRepos) {
+      const srcGit = join(sourcePath, repoRelPath, '.git');
+      const destGit = join(destPath, repoRelPath, '.git');
+
+      try {
+        // Check if destination directory exists (it should, from parent's tracked files)
+        const destRepo = join(destPath, repoRelPath);
+        try {
+          await access(destRepo);
+        } catch {
+          // Directory doesn't exist, create it
+          await mkdir(destRepo, { recursive: true });
+        }
+
+        // Copy only the .git directory (or file, if it's a gitlink)
+        const srcGitStat = await stat(srcGit);
+        if (srcGitStat.isDirectory()) {
+          await cp(srcGit, destGit, { recursive: true });
+        } else {
+          // .git is a file (gitlink for worktrees/submodules) - copy as file
+          await cp(srcGit, destGit);
+        }
+      } catch {
+        // Failed to copy, skip this repo
+      }
     }
   }
 
@@ -99,6 +178,19 @@ export class WorktreeManager {
     } else {
       await this.git.raw(['worktree', 'add', worktreePath, branch]);
     }
+
+    // Initialize and update submodules in the new worktree
+    // Git worktrees don't automatically copy submodule contents
+    try {
+      const worktreeGit = simpleGit(worktreePath);
+      await worktreeGit.submoduleUpdate(['--init', '--recursive']);
+    } catch {
+      // Submodule update may fail if no submodules exist, that's OK
+    }
+
+    // Copy nested git repos (directories with .git that aren't submodules)
+    // These are independent repos that git worktree doesn't handle
+    await this.copyNestedGitRepos(this.repoPath, worktreePath);
 
     return {
       id: this.generateId(),
