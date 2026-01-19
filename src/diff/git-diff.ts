@@ -81,6 +81,9 @@ export async function getDiffSummary(repoPath: string): Promise<DiffFileSummary[
     }
 
     for (const file of status.created) {
+      // Skip nested git repos
+      if (await isNestedGitRepo(repoPath, file)) continue;
+
       const stats = await getFileStats(git, file, true);
       files.push({
         file,
@@ -133,6 +136,9 @@ export async function getDiffSummary(repoPath: string): Promise<DiffFileSummary[
 
     // Include untracked files (show as 'A' added with line count)
     for (const file of status.not_added) {
+      // Skip nested git repos - they show as untracked directories
+      if (await isNestedGitRepo(repoPath, file)) continue;
+
       const lineCount = await countFileLines(repoPath, file);
       files.push({
         file,
