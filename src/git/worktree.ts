@@ -85,9 +85,10 @@ export class WorktreeManager {
   }
 
   /**
-   * Copy nested git repos' .git directories to worktree
-   * This preserves the nested repo's git history without duplicating files
-   * (files already exist from parent's worktree)
+   * Copy nested git repos to worktree
+   *
+   * If parent tracks nested repo contents: only copy .git (files already exist)
+   * If parent doesn't track contents: copy entire repo (files + .git)
    *
    * Skips directories that already have .git (e.g., initialized submodules)
    */
@@ -95,8 +96,10 @@ export class WorktreeManager {
     const nestedRepos = await this.findNestedGitRepos(sourcePath);
 
     for (const repoRelPath of nestedRepos) {
-      const srcGit = join(sourcePath, repoRelPath, '.git');
-      const destGit = join(destPath, repoRelPath, '.git');
+      const srcRepo = join(sourcePath, repoRelPath);
+      const srcGit = join(srcRepo, '.git');
+      const destRepo = join(destPath, repoRelPath);
+      const destGit = join(destRepo, '.git');
 
       try {
         // Skip if destination already has .git (e.g., submodule was already initialized)
@@ -108,22 +111,31 @@ export class WorktreeManager {
           // .git doesn't exist, proceed with copy
         }
 
-        // Check if destination directory exists (it should, from parent's tracked files)
-        const destRepo = join(destPath, repoRelPath);
+        // Check if destination directory exists and has content
+        let destIsEmpty = true;
         try {
           await access(destRepo);
+          const entries = await readdir(destRepo);
+          // Filter out .git if somehow present
+          const contentEntries = entries.filter(e => e !== '.git');
+          destIsEmpty = contentEntries.length === 0;
         } catch {
-          // Directory doesn't exist, create it
-          await mkdir(destRepo, { recursive: true });
+          // Directory doesn't exist
+          destIsEmpty = true;
         }
 
-        // Copy only the .git directory (or file, if it's a gitlink)
-        const srcGitStat = await stat(srcGit);
-        if (srcGitStat.isDirectory()) {
-          await cp(srcGit, destGit, { recursive: true });
+        if (destIsEmpty) {
+          // Parent doesn't track nested repo contents - copy entire repo
+          await cp(srcRepo, destRepo, { recursive: true });
         } else {
-          // .git is a file (gitlink for worktrees/submodules) - copy as file
-          await cp(srcGit, destGit);
+          // Parent tracks contents - only copy .git
+          const srcGitStat = await stat(srcGit);
+          if (srcGitStat.isDirectory()) {
+            await cp(srcGit, destGit, { recursive: true });
+          } else {
+            // .git is a file (gitlink for worktrees/submodules) - copy as file
+            await cp(srcGit, destGit);
+          }
         }
       } catch {
         // Failed to copy, skip this repo

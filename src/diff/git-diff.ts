@@ -7,7 +7,7 @@
 
 import { simpleGit, SimpleGit } from 'simple-git';
 import { watch, FSWatcher } from 'fs';
-import { readFile } from 'fs/promises';
+import { readFile, stat } from 'fs/promises';
 import { join } from 'path';
 
 // ============================================================================
@@ -26,12 +26,36 @@ export interface DiffFileSummary {
 }
 
 // ============================================================================
+// Helpers
+// ============================================================================
+
+/**
+ * Check if a path is a nested git repo (directory with .git inside)
+ * These show up as "modified" in git status but aren't real file changes
+ */
+async function isNestedGitRepo(repoPath: string, filePath: string): Promise<boolean> {
+  try {
+    const fullPath = join(repoPath, filePath);
+    const fileStat = await stat(fullPath);
+    if (!fileStat.isDirectory()) return false;
+
+    // Check if it has a .git inside
+    const gitPath = join(fullPath, '.git');
+    await stat(gitPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// ============================================================================
 // Git Diff Functions
 // ============================================================================
 
 /**
  * Get a summary of all changed files in the working directory
  * Includes both staged and unstaged changes compared to HEAD
+ * Filters out nested git repos (directories with .git) which git shows as "modified"
  */
 export async function getDiffSummary(repoPath: string): Promise<DiffFileSummary[]> {
   const git = simpleGit(repoPath);
@@ -43,6 +67,9 @@ export async function getDiffSummary(repoPath: string): Promise<DiffFileSummary[
 
     // Process all changed files from status
     for (const file of status.modified) {
+      // Skip nested git repos - they show as "modified" but aren't real file changes
+      if (await isNestedGitRepo(repoPath, file)) continue;
+
       const stats = await getFileStats(git, file);
       files.push({
         file,
@@ -90,6 +117,9 @@ export async function getDiffSummary(repoPath: string): Promise<DiffFileSummary[
     // Also include staged files that might not be in the above categories
     for (const file of status.staged) {
       if (!files.some(f => f.file === file)) {
+        // Skip nested git repos
+        if (await isNestedGitRepo(repoPath, file)) continue;
+
         const stats = await getFileStats(git, file);
         files.push({
           file,
